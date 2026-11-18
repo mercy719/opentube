@@ -1,0 +1,32 @@
+pluginManagement {
+    repositories { google(); mavenCentral(); gradlePluginPortal() }
+}
+
+rootProject.name = 'OpenTube'
+
+def tp = new File(settingsDir, 'third_party')
+gradle.ext.sharedModulesRoot = new File(tp, 'SharedModules')
+gradle.ext.mediaServiceCoreRoot = new File(tp, 'MediaServiceCore')
+gradle.ext.exoplayerModulePrefix = 'exoplayer-'
+
+include ':app'
+
+// --- SmartTube 后端（vendored，见 third_party/README.md）---
+include ':sharedutils', ':sharedtests', ':commons-io-2.8.0', ':j2v8'
+project(':sharedtests').projectDir = new File(tp, 'SharedModules/sharedtests')
+project(':sharedutils').projectDir = new File(tp, 'SharedModules/sharedutils')
+project(':commons-io-2.8.0').projectDir = new File(tp, 'SharedModules/commons-io-2.8.0')
+project(':j2v8').projectDir = new File(tp, 'SharedModules/j2v8')
+
+include ':mediaserviceinterfaces', ':youtubeapi'
+project(':mediaserviceinterfaces').projectDir = new File(tp, 'MediaServiceCore/mediaserviceinterfaces')
+project(':youtubeapi').projectDir = new File(tp, 'MediaServiceCore/youtubeapi')
+
+// --- SmartTube 的 ExoPlayer 2.10.6 fork（含 SABR）---
+def exo = new File(tp, 'exoplayer')
+['core', 'dash', 'sabr', 'hls'].each { m ->
+    include ":exoplayer-library-$m"
+    project(":exoplayer-library-$m").projectDir = new File(exo, "library/$m")
+}
+include ':exoplayer-extension-okhttp'
+project(':exoplayer-extension-okhttp').projectDir = new File(exo, 'extensions/okhttp')

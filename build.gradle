@@ -1,0 +1,65 @@
+// 根构建脚本：Groovy，以便兼容 vendored 模块对 project.ext 常量的依赖
+buildscript {
+    apply from: 'third_party/SharedModules/constants.gradle'
+    ext.kotlinVersion = '2.0.21'
+    repositories { google(); mavenCentral() }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.7.3'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion"
+        classpath "org.jetbrains.kotlin:compose-compiler-gradle-plugin:$kotlinVersion"
+    }
+}
+
+apply from: 'third_party/SharedModules/constants.gradle'
+// 覆盖上游常量，适配 AGP 8 / Kotlin 2
+ext {
+    kotlinVersion = '2.0.21'
+    kotlinxVersion = '1.9.0'
+    kotlinCoreXVersion = '1.13.1'
+    coreXVersion = '1.13.1'
+    compileSdkVersion = 35
+    buildToolsVersion = '35.0.0'
+    okhttpVersion = '4.12.0'
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url 'https://jitpack.io' }
+    }
+    configurations.configureEach {
+        resolutionStrategy.force 'com.squareup.okhttp3:okhttp:' + okhttpVersion
+        resolutionStrategy.force 'org.chromium.net:cronet-api:' + cronetApiVersion
+        resolutionStrategy.force 'org.jetbrains.kotlinx:kotlinx-coroutines-android:' + kotlinxVersion
+    }
+}
+
+def vendoredNamespaces = [
+    ':sharedutils'                : 'com.liskovsoft.sharedutils',
+    ':sharedtests'                : 'com.liskovsoft.sharedtests',
+    ':commons-io-2.8.0'           : 'org.apache.commons.commonsio',
+    ':j2v8'                       : 'com.eclipsesource.v8',
+    ':mediaserviceinterfaces'     : 'com.liskovsoft.mediaserviceinterfaces',
+    ':youtubeapi'                 : 'com.liskovsoft.youtubeapi',
+    ':exoplayer-library-core'     : 'com.google.android.exoplayer2.core',
+    ':exoplayer-library-dash'     : 'com.google.android.exoplayer2.source.dash',
+    ':exoplayer-library-sabr'     : 'com.google.android.exoplayer2.source.sabr',
+    ':exoplayer-library-hls'      : 'com.google.android.exoplayer2.source.hls',
+    ':exoplayer-extension-okhttp' : 'com.google.android.exoplayer2.ext.okhttp',
+]
+
+// vendored 模块的 AGP 8 兼容处理：namespace 取自原 manifest 包名，统一 Java 8 目标
+subprojects { p ->
+    if (p.path == ':app') return
+    p.plugins.withId('com.android.library') {
+        p.android {
+            if (namespace == null) namespace = vendoredNamespaces[p.path]
+            buildFeatures.buildConfig = true
+            lint.abortOnError = false
+        }
+    }
+    p.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+        compilerOptions.jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_1_8)
+    }
+}

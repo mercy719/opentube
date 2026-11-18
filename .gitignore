@@ -1,0 +1,9 @@
+/upstream-smarttube/
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+captures/
+.kotlin/
