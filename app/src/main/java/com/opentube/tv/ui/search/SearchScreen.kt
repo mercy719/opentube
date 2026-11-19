@@ -52,7 +52,7 @@ import com.opentube.tv.ui.components.FilmStrip
 import com.opentube.tv.ui.components.LoadingLine
 import com.opentube.tv.ui.components.PillButton
 import com.opentube.tv.ui.components.PivotSpec
-import com.opentube.tv.ui.components.greasePencil
+import com.opentube.tv.ui.components.focusRing
 import com.opentube.tv.ui.components.isShowable
 import com.opentube.tv.ui.feed.Strip
 import com.opentube.tv.ui.theme.Dims
@@ -139,7 +139,7 @@ fun SearchScreen(vm: SearchViewModel, onOpen: (MediaItem) -> Unit) {
         Spacer(Modifier.height(14.dp))
         Row(
             Modifier.padding(horizontal = Dims.SafeH).fillMaxWidth()
-                .greasePencil(fieldFocused, "search-field", outset = 4.dp)
+                .focusRing(fieldFocused, outset = 3.dp, corner = 4.dp)
                 .background(Film.Rebate, RoundedCornerShape(4.dp))
                 .border(1.dp, Film.Seam, RoundedCornerShape(4.dp))
                 .padding(horizontal = 16.dp, vertical = 12.dp),

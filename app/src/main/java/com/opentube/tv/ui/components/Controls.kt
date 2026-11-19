@@ -39,7 +39,7 @@ fun PillButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier
     var focused by remember { mutableStateOf(false) }
     Surface(
         onClick = onClick,
-        modifier = modifier.onFocusChanged { focused = it.isFocused }.greasePencil(focused, label, outset = 6.dp),
+        modifier = modifier.onFocusChanged { focused = it.isFocused }.focusRing(focused, outset = 3.dp, corner = 100.dp),
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(50)),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
         colors = ClickableSurfaceDefaults.colors(

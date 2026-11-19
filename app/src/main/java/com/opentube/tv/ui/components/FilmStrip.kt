@@ -107,8 +107,8 @@ fun Frame(item: MediaItem, index: Int, onFocused: () -> Unit, onClick: () -> Uni
             modifier = modifier
                 .size(Dims.FrameWidth, Dims.FrameHeight)
                 .onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocused() }
-                .greasePencil(focused, item.videoId ?: item.title ?: index),
-            shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(2.dp)),
+                .focusRing(focused, outset = 3.dp, corner = 6.dp),
+            shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(6.dp)),
             scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
             colors = ClickableSurfaceDefaults.colors(containerColor = Film.Seam, focusedContainerColor = Film.Seam),
             glow = ClickableSurfaceDefaults.glow(),

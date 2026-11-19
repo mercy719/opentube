@@ -77,7 +77,7 @@ import com.opentube.tv.ui.components.formatTime
 import com.opentube.tv.ui.components.channelName
 import com.opentube.tv.ui.components.heroImageUrl
 import com.opentube.tv.ui.components.cardUrl
-import com.opentube.tv.ui.components.greasePencil
+import com.opentube.tv.ui.components.focusRing
 import com.opentube.tv.ui.theme.Dims
 import com.opentube.tv.ui.theme.Film
 import com.opentube.tv.ui.theme.Type
@@ -353,7 +353,7 @@ private fun OptionRow(label: String, selected: Boolean, onClick: () -> Unit, mod
     var focused by remember { mutableStateOf(false) }
     androidx.tv.material3.Surface(
         onClick = onClick,
-        modifier = modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused }.greasePencil(focused, label, outset = 3.dp),
+        modifier = modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused }.focusRing(focused, outset = 3.dp, corner = 4.dp),
         shape = androidx.tv.material3.ClickableSurfaceDefaults.shape(RoundedCornerShape(4.dp)),
         scale = androidx.tv.material3.ClickableSurfaceDefaults.scale(focusedScale = 1f),
         colors = androidx.tv.material3.ClickableSurfaceDefaults.colors(containerColor = Color.Transparent, focusedContainerColor = Film.Raised),

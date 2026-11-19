@@ -29,7 +29,7 @@ import androidx.tv.material3.Text
 import com.opentube.tv.BuildConfig
 import com.opentube.tv.data.Settings
 import com.opentube.tv.data.YouTube
-import com.opentube.tv.ui.components.greasePencil
+import com.opentube.tv.ui.components.focusRing
 import com.opentube.tv.ui.theme.Dims
 import com.opentube.tv.ui.theme.Film
 import com.opentube.tv.ui.theme.Type
@@ -70,7 +70,7 @@ private fun SettingRow(label: String, value: String, danger: Boolean = false, mo
     var focused by remember { mutableStateOf(false) }
     Surface(
         onClick = { onClick?.invoke() },
-        modifier = modifier.onFocusChanged { focused = it.isFocused }.greasePencil(focused, label, outset = 3.dp),
+        modifier = modifier.onFocusChanged { focused = it.isFocused }.focusRing(focused, outset = 3.dp, corner = 3.dp),
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(3.dp)),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
         colors = ClickableSurfaceDefaults.colors(containerColor = Film.Rebate, focusedContainerColor = Film.Raised),

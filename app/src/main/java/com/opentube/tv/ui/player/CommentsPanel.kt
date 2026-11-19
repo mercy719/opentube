@@ -57,7 +57,7 @@ import com.bumptech.glide.integration.compose.GlideImage
 import com.liskovsoft.mediaserviceinterfaces.data.CommentItem
 import com.opentube.tv.data.YouTube
 import com.opentube.tv.ui.components.LoadingLine
-import com.opentube.tv.ui.components.greasePencil
+import com.opentube.tv.ui.components.focusRing
 import com.opentube.tv.ui.theme.Dims
 import com.opentube.tv.ui.theme.Film
 import com.opentube.tv.ui.theme.Type
@@ -265,7 +265,7 @@ private fun CommentRow(
         onLongClick = onLongClick,
         modifier = modifier.fillMaxWidth().padding(start = if (indent) 18.dp else 0.dp)
             .onFocusChanged { focused = it.isFocused }
-            .greasePencil(focused, c.id ?: c.message.orEmpty(), outset = 2.dp),
+            .focusRing(focused, outset = 2.dp, corner = 4.dp),
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(4.dp)),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
         colors = ClickableSurfaceDefaults.colors(containerColor = Color.Transparent, focusedContainerColor = Film.Raised),

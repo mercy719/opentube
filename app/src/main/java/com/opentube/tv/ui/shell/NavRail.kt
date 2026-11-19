@@ -31,7 +31,7 @@ import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
-import com.opentube.tv.ui.components.greasePencil
+import com.opentube.tv.ui.components.focusRing
 import com.opentube.tv.ui.theme.Dims
 import com.opentube.tv.ui.theme.Film
 import com.opentube.tv.ui.theme.Type
@@ -59,7 +59,7 @@ fun NavRail(current: Tab, onSelect: (Tab) -> Unit, modifier: Modifier = Modifier
                 onClick = { onSelect(tab) },
                 modifier = Modifier
                     .onFocusChanged { focused = it.isFocused; if (it.isFocused && !selected) onSelect(tab) }
-                    .greasePencil(focused, tab.name, outset = 3.dp),
+                    .focusRing(focused, outset = 1.5.dp, stroke = 2.dp),
                 shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(6.dp)),
                 scale = ClickableSurfaceDefaults.scale(focusedScale = 1f),
                 colors = ClickableSurfaceDefaults.colors(containerColor = Film.Base, focusedContainerColor = Film.Raised),
