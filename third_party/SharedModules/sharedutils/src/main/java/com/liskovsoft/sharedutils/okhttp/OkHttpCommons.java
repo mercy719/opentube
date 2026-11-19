@@ -317,8 +317,11 @@ final class OkHttpCommons {
         builder.addInterceptor(new RateLimitInterceptor());
     }
 
+    /** OPENTUBE: 调试拦截器默认关闭——BODY 日志和 Profiler 会把整段响应（包括视频分片）读进内存再打印，严重拖慢起播 */
+    public static boolean enableDebugInterceptors = false;
+
     private static void debugSetup(OkHttpClient.Builder okBuilder) {
-        if (BuildConfig.DEBUG) {
+        if (BuildConfig.DEBUG && enableDebugInterceptors) {
             // Profiler could cause OutOfMemoryError when testing.
             // Also outputs to logcat tons of info.
             // If you enable it to all requests - expect slowdowns.

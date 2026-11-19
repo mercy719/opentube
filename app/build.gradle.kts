@@ -12,8 +12,8 @@ android {
         applicationId = "com.opentube.tv"
         minSdk = 21
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.1"
         multiDexEnabled = true
         // vendored 后端模块带 stbeta/ststable/stfdroid 三个 flavor，选 ststable
         missingDimensionStrategy("default", "ststable")

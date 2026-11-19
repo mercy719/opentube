@@ -223,6 +223,17 @@ public class SabrStream {
         return processor.getBackoffTimeMs();
     }
 
+    /**
+     * OPENTUBE: 读取并清除退避时间，保证同一次退避只等一次。
+     * 注意：服务器的退避按时间计（立即重发会收到“剩余毫秒数”），不能跳过；
+     * 起播阶段的固定 ~4 秒退避由应用层的后台预加载来提前消化。
+     */
+    public int consumeBackoffTimeMs() {
+        int ms = processor.getBackoffTimeMs();
+        processor.clearBackoff();
+        return ms;
+    }
+
     public SabrStreamError getFatalError() {
         return processor.getFatalError();
     }
@@ -386,6 +397,8 @@ public class SabrStream {
         }
 
         setUrl(sabrRedirect.getRedirectUrl());
+        // OPENTUBE: 换到新服务器，旧服务器的退避不再适用
+        processor.clearBackoff();
     }
 
     private FormatInitializedSabrPart processFormatInitializationMetadata(UMPPart part) {

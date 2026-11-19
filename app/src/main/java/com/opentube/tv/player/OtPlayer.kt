@@ -1,6 +1,8 @@
 package com.opentube.tv.player
 
 import android.content.Context
+import android.os.SystemClock
+import android.util.Log
 import android.view.SurfaceView
 import com.google.android.exoplayer2.C
 import com.google.android.exoplayer2.DefaultLoadControl
@@ -87,7 +89,7 @@ class OtPlayer(private val context: Context) {
         parameters = buildUponParameters().setViewportSizeToPhysicalDisplaySize(context, true).build()
     }
 
-    private val loadControl = DefaultLoadControl.Builder()
+    private val baseLoadControl = DefaultLoadControl.Builder()
         .setBufferDurationsMs(
             /* minBufferMs = */ 15_000,
             /* maxBufferMs = */ 50_000,
@@ -96,6 +98,8 @@ class OtPlayer(private val context: Context) {
         )
         .setPrioritizeTimeOverSizeThresholds(true)
         .createDefaultLoadControl()
+    /** 预加载期间只缓冲几秒，避免浏览时白白下载大量数据 */
+    private val loadControl = PreloadAwareLoadControl(baseLoadControl, preloadBufferUs = 6_000_000)
 
     val exo: SimpleExoPlayer = ExoPlayerFactory.newSimpleInstance(
         context,
@@ -115,6 +119,12 @@ class OtPlayer(private val context: Context) {
     private var retries = 0
     private var loadJob: Job? = null
     private var lastReportAt = 0L
+    private var preloadedId: String? = null
+    private var preloadJob: Job? = null
+    private var openedAt = 0L
+    private var firstFrameLogged = false
+
+    private fun mark(step: String) = Log.i("OtTiming", "$step +${SystemClock.elapsedRealtime() - openedAt}ms id=$videoId")
 
     var sponsorCategories: Set<String> = DEFAULT_SPONSOR_CATEGORIES
 
@@ -127,7 +137,7 @@ class OtPlayer(private val context: Context) {
                     Player.STATE_ENDED -> PlayerState.Phase.Ended
                     else -> _state.value.phase
                 }
-                if (playbackState == Player.STATE_READY) retries = 0
+                if (playbackState == Player.STATE_READY) { retries = 0; if (!firstFrameLogged) mark("ready") }
                 if (!playWhenReady || playbackState == Player.STATE_ENDED) reportPosition()
                 _state.update { it.copy(phase = phase) }
             }
@@ -139,6 +149,10 @@ class OtPlayer(private val context: Context) {
             }
         })
         exo.addVideoListener(object : VideoListener {
+            override fun onRenderedFirstFrame() {
+                if (!firstFrameLogged) { firstFrameLogged = true; mark("first-frame") }
+            }
+
             override fun onVideoSizeChanged(width: Int, height: Int, unappliedRotationDegrees: Int, pixelWidthHeightRatio: Float) {
                 if (height > 0) _state.update { it.copy(videoAspect = width * pixelWidthHeightRatio / height, currentHeight = height) }
             }
@@ -149,14 +163,65 @@ class OtPlayer(private val context: Context) {
     fun attach(surface: SurfaceView) = exo.setVideoSurfaceView(surface)
     fun detach(surface: SurfaceView) = exo.clearVideoSurfaceView(surface)
 
+    /**
+     * 浏览时的后台预热：焦点停留的视频先在后台开流（不播放、不上报、只缓冲几秒）。
+     * YouTube SABR 在会话的第一个请求后固定要求等 ~4 秒，预热把这段等待挪到用户看标题的时间里，
+     * 按下确认时多半已经有画面可播。
+     */
+    fun preload(item: MediaItem) {
+        val id = item.videoId ?: return
+        if (videoId != null || preloadedId == id) return
+        preloadJob?.cancel()
+        preloadJob = scope.launch {
+            val fi = Prefetcher.get(id) ?: return@launch
+            val r = sources.create(fi) as? MediaSources.Result.Ready ?: return@launch
+            if (videoId != null) return@launch
+            preloadedId = id
+            loadControl.preloading = true
+            exo.playWhenReady = false
+            exo.prepare(r.source, true, true)
+            val resume = resumePositionMs(item, fi.lengthSeconds?.toLongOrNull()?.times(1000) ?: 0)
+            if (resume > 0) exo.seekTo(resume)
+            Log.i("OtTiming", "preload id=$id kind=${r.kind}")
+        }
+    }
+
+    /** 离开播放页：上报进度、停止播放，之后可以继续预热别的视频 */
+    fun close() {
+        reportPosition()
+        loadJob?.cancel()
+        videoId = null
+        mediaItem = null
+        preloadedId = null
+        exo.stop()
+    }
+
+    /** App 退到后台时停止预热 */
+    fun cancelPreload() {
+        preloadJob?.cancel()
+        if (videoId == null && preloadedId != null) { preloadedId = null; exo.stop() }
+    }
+
     /** 打开视频。startMs < 0 表示按后端记录的观看进度续播 */
     fun open(videoId: String, item: MediaItem? = null, startMs: Long = -1) {
         reportPosition()
+        val warm = preloadedId == videoId && startMs < 0 && exo.playbackState != Player.STATE_IDLE
+        preloadJob?.cancel()
+        preloadedId = null
+        loadControl.preloading = false
         this.videoId = videoId
         this.mediaItem = item
         retries = 0
-        _state.value = PlayerState(quality = _state.value.quality, speed = _state.value.speed)
-        load(startMs)
+        openedAt = SystemClock.elapsedRealtime(); firstFrameLogged = false
+        mark("open prefetched=${Prefetcher.isReady(videoId)} preloaded=$warm")
+        val prev = _state.value
+        _state.value = PlayerState(quality = prev.quality, speed = prev.speed)
+        if (warm) {
+            _state.update { it.copy(availableHeights = videoHeights(), videoAspect = prev.videoAspect, currentHeight = prev.currentHeight) }
+            exo.playWhenReady = true
+        } else {
+            load(startMs)
+        }
         scope.launch {
             val segs = YouTube.sponsorSegments(videoId, sponsorCategories)
             if (this@OtPlayer.videoId == videoId) _state.update { it.copy(segments = segs) }
@@ -168,6 +233,7 @@ class OtPlayer(private val context: Context) {
         loadJob?.cancel()
         loadJob = scope.launch {
             val fi = Prefetcher.get(id)
+            mark("format-info")
             if (fi == null) {
                 _state.update { it.copy(phase = PlayerState.Phase.Error, message = "无法获取视频信息，请检查网络") }
                 return@launch
@@ -177,9 +243,10 @@ class OtPlayer(private val context: Context) {
                 is MediaSources.Result.NotYet -> _state.update { it.copy(phase = PlayerState.Phase.Error, message = r.reason ?: "直播尚未开始") }
                 is MediaSources.Result.Ready -> {
                     exo.prepare(r.source, true, true)
+                    mark("prepare ${r.kind}")
                     val resume = when {
                         startMs >= 0 -> startMs
-                        else -> resumePositionMs(fi.lengthSeconds?.toLongOrNull()?.times(1000) ?: 0)
+                        else -> resumePositionMs(mediaItem, fi.lengthSeconds?.toLongOrNull()?.times(1000) ?: 0)
                     }
                     if (resume > 0) exo.seekTo(resume)
                     exo.playWhenReady = true
@@ -188,8 +255,8 @@ class OtPlayer(private val context: Context) {
         }
     }
 
-    private fun resumePositionMs(durationMs: Long): Long {
-        val item = mediaItem ?: return 0
+    private fun resumePositionMs(item: MediaItem?, durationMs: Long): Long {
+        if (item == null) return 0
         if (item.startTimeSeconds > 0) return item.startTimeSeconds * 1000L
         val pct = item.percentWatched
         if (pct in 3..94 && durationMs > 0) return durationMs * pct / 100
@@ -197,6 +264,7 @@ class OtPlayer(private val context: Context) {
     }
 
     private fun handleError(error: ExoPlaybackException) {
+        Log.w("OtTiming", "error retry=$retries", error)
         val pos = exo.currentPosition
         val id = videoId ?: return
         val cause = generateSequence<Throwable>(error) { it.cause }.toList()

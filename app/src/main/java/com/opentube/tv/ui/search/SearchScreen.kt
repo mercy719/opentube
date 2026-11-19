@@ -128,7 +128,8 @@ fun SearchScreen(vm: SearchViewModel, onOpen: (MediaItem) -> Unit) {
         if (pendingFocusResults && results.isNotEmpty()) { delay(80); runCatching { firstResult.requestFocus() }; pendingFocusResults = false }
     }
 
-    LaunchedEffect(focused) { val f = focused ?: return@LaunchedEffect; delay(450); f.videoId?.let(Prefetcher::prefetch) }
+    val preload = com.opentube.tv.ui.components.LocalPreload.current
+    LaunchedEffect(focused) { val f = focused ?: return@LaunchedEffect; delay(450); f.videoId?.let(Prefetcher::prefetch); preload(f) }
     val allowAuto = com.opentube.tv.ui.components.LocalAllowAutoFocus.current
     LaunchedEffect(Unit) { if (results.isEmpty() && allowAuto) runCatching { fieldFocus.requestFocus() } }
 
@@ -174,7 +175,10 @@ fun SearchScreen(vm: SearchViewModel, onOpen: (MediaItem) -> Unit) {
                 "没有找到“$searched”的结果，换个关键词试试",
                 style = Type.Body1.copy(color = Film.Edge2), modifier = Modifier.padding(start = Dims.SafeH, top = 24.dp),
             )
-            else -> CompositionLocalProvider(LocalBringIntoViewSpec provides remember { PivotSpec(0f) }) {
+            else -> CompositionLocalProvider(LocalBringIntoViewSpec provides run {
+                val lead = with(androidx.compose.ui.platform.LocalDensity.current) { com.opentube.tv.ui.theme.Dims.StripHeader.toPx() }
+                remember(lead) { PivotSpec(0f, leadPx = lead) }
+            }) {
                 LazyColumn(
                     Modifier.fillMaxWidth().weight(1f),
                     verticalArrangement = Arrangement.spacedBy(1.dp),

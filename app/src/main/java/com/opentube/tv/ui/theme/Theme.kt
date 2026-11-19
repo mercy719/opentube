@@ -75,6 +75,8 @@ object Dims {
     val FrameWidth = 184.dp
     val FrameHeight = 103.5.dp
     val FrameGap = 14.dp
+    /** FilmStrip 页眉高度：上 10dp + 文字行 20dp + 下 8dp。纵向滚动时留出它，页眉和获焦红框才不会被上方遮住 */
+    val StripHeader = 38.dp
 }
 
 @Composable

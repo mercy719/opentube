@@ -189,7 +189,7 @@ public final class SabrExtractorInput implements ExtractorInput {
             if (sabrPart == null) {
                 // The stream ended. If the server told us to back off, honor it instead of
                 // re-requesting immediately - otherwise we burn exactly the waiting period the server asked for.
-                int backoffMs = sabrStream.getBackoffTimeMs();
+                int backoffMs = sabrStream.consumeBackoffTimeMs();
 
                 if (backoffMs > MIN_SWALLOW_BACKOFF_MS) {
                     // Server backoff is too long: reload the format rather than wait.

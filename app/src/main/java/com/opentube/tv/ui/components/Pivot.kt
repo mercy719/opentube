@@ -10,9 +10,14 @@ import androidx.compose.foundation.gestures.BringIntoViewSpec
  * - margin == null：固定把获焦项放在容器的 parentFraction 处。
  */
 @OptIn(ExperimentalFoundationApi::class)
-class PivotSpec(private val parentFraction: Float = 0f, private val marginPx: Float? = null) : BringIntoViewSpec {
+class PivotSpec(
+    private val parentFraction: Float = 0f,
+    private val marginPx: Float? = null,
+    /** 固定模式下额外往下留的距离：例如把胶片行的页眉和获焦红框一起留在视野里 */
+    private val leadPx: Float = 0f,
+) : BringIntoViewSpec {
     override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
-        val m = marginPx ?: return offset - parentFraction * containerSize
+        val m = marginPx ?: return offset - parentFraction * containerSize - leadPx
         return when {
             offset < m -> offset - m
             offset + size > containerSize - m -> (offset + size) - (containerSize - m)

@@ -740,6 +740,17 @@ public class SabrProcessor {
         return nextRequestPolicy != null ? nextRequestPolicy.getBackoffTimeMs() : 0;
     }
 
+    /**
+     * OPENTUBE: 退避只执行一次。NextRequestPolicy 会一直保留到服务器下发新的策略，
+     * 不清掉的话，后续每个请求结束都会重复 sleep 同样的时长（包括重定向到新服务器之后）。
+     * playback cookie 保留，后续请求还要带上。
+     */
+    public void clearBackoff() {
+        if (nextRequestPolicy != null && nextRequestPolicy.getBackoffTimeMs() > 0) {
+            nextRequestPolicy = nextRequestPolicy.toBuilder().clearBackoffTimeMs().build();
+        }
+    }
+
     public SabrStreamError getFatalError() {
         return fatalError != null && fatalError.isStale() ? fatalError : null;
     }

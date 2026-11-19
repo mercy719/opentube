@@ -50,11 +50,12 @@ fun FeedScreen(
         if (state.strips.isNotEmpty() && !gaveInitialFocus && allowAuto) { delay(50); gaveInitialFocus = runCatching { firstFrame.requestFocus() }.isSuccess }
     }
 
-    // 焦点停留 180ms 才换大图，停留 450ms 开始预取播放信息
+    // 焦点停留 180ms 换大图，350ms 起预取播放信息并后台预热播放（提前消化 SABR 起播的 ~4 秒退避）
+    val preload = com.opentube.tv.ui.components.LocalPreload.current
     LaunchedEffect(focused) {
         val f = focused ?: return@LaunchedEffect
         delay(180); heroItem = f
-        delay(270); f.videoId?.let(Prefetcher::prefetch)
+        delay(170); f.videoId?.let(Prefetcher::prefetch); preload(f)
     }
     LaunchedEffect(state.strips.isNotEmpty()) {
         if (heroItem == null) heroItem = state.strips.firstOrNull()?.items?.firstOrNull()
@@ -70,7 +71,9 @@ fun FeedScreen(
         )
         else -> Column(Modifier.fillMaxSize()) {
             Hero(heroItem, height = 230.dp, modifier = Modifier.padding(start = Dims.SafeH, end = Dims.SafeH, top = Dims.SafeV))
-            CompositionLocalProvider(LocalBringIntoViewSpec provides remember { PivotSpec(0f) }) {
+            // 获焦的是缩略图，顶到最上沿会把这一行的页眉和红框上边挤到大图下面；留出页眉高度
+            val lead = with(androidx.compose.ui.platform.LocalDensity.current) { Dims.StripHeader.toPx() }
+            CompositionLocalProvider(LocalBringIntoViewSpec provides remember(lead) { PivotSpec(0f, leadPx = lead) }) {
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 20.dp),
                     verticalArrangement = Arrangement.spacedBy(1.dp), // 胶片之间 1px 细缝

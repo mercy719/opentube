@@ -111,7 +111,7 @@ fun PlayerScreen(player: OtPlayer, item: MediaItem, onExit: () -> Unit) {
         if (panel == Panel.None) { delay(60); runCatching { if (overlay) playFocus.requestFocus() else rootFocus.requestFocus() } }
     }
     LaunchedEffect(st.lastSkipped) { if (st.lastSkipped != null) { delay(3_500); player.clearSkipNotice() } }
-    DisposableEffect(Unit) { onDispose { player.exo.stop() } }
+    DisposableEffect(Unit) { onDispose { player.close() } }
 
     fun onBack() {
         when {

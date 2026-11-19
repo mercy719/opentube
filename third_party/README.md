@@ -21,3 +21,5 @@ OpenTube 复用其 YouTube 后端与播放内核，UI 层完全重写。
 
 同步上游时，请重新应用以上改动。
 - `CommentsService.setLikeObserve(item, like)`（接口 + `YouTubeCommentsService` + `CommentsServiceInt.setLike`）：用评论自带的 like/unlike 参数直接点赞，原来的 `toggleLikeObserve(nestedKey)` 只对有回复的评论有效。
+- `OkHttpCommons.enableDebugInterceptors = false`：debug 构建下不再挂 BODY 日志和 OkHttpProfiler。它们会把整段响应（包括视频分片）读进内存再打印，导致起播极慢。
+- SABR 退避只执行一次（`SabrProcessor.clearBackoff` / `SabrStream.consumeBackoffTimeMs`），重定向到新服务器时清除旧退避。原实现会在之后每个请求结束时重复等待同样时长（起播时多等约 4 秒）。
