@@ -19,7 +19,8 @@ SmartTube works and has no ads, but its interface is crowded, hard to use, and b
 ### Features
 
 - **Home / Subscriptions / History / Search** in a left nav rail — moving focus onto a tab switches to it; search has suggestions
-- **Fast start**: when focus rests on a video, OpenTube prefetches its stream info and quietly starts the stream in the background (a few seconds of buffer, no playback, no history entry). If you linger long enough, pressing OK plays almost instantly. A poster is shown instead of a black screen while loading
+- **Hot-zone preloading**: the focused video and its left/right neighbours each get their own player that quietly buffers the first 30 seconds of real content in the background — sponsor/intro segments at the start are skipped, so the buffer begins where the video actually starts. Moving focus one step reuses an already-warm player; pressing OK usually starts playback instantly. No history entry is created by preloading
+- **Hero preview**: rest on a video for about a second and the large header plays it muted, straight from the preload buffer
 - **Auto quality**: adapts to bandwidth like the official app; you can also cap it
 - **SponsorBlock**: skips sponsors, intros, outros and more, with segments marked on the timeline
 - **No ads**
@@ -67,7 +68,7 @@ DESIGN.md / PRODUCT.md    design system and product principles
 
 ### Known limitations
 
-- YouTube's SABR streaming protocol makes the client wait about 4 seconds at the start of every playback session. This is enforced server-side; OpenTube hides it by preloading while you browse, but if you press OK right after focusing a video you may still wait 2–3 seconds.
+- YouTube's SABR streaming protocol makes the client wait about 4 seconds at the start of every playback session. This is enforced server-side; OpenTube hides it by preloading the hot zone while you browse, but if you press OK right after jumping to a far-away video you may still wait a few seconds. When signed out, YouTube also blocks the TV client, so OpenTube falls back to the web client; signing in may help.
 - No channel page yet (selecting a channel searches for its name), no subtitles.
 
 ### Credits
@@ -93,7 +94,8 @@ OpenTube's own code is [MIT](LICENSE). Code under `third_party/` keeps its origi
 ### 功能
 
 - **首页 / 订阅 / 历史 / 搜索**：左侧导航栏，焦点移过去就切换；搜索带联想
-- **快速起播**：焦点停在视频上，就预取播放信息并在后台悄悄开流（只缓冲几秒，不播放、不计入历史）。停留够久再按确认，基本点开即播；加载时显示封面，不黑屏
+- **热区预热**：焦点所在的视频和左右两个邻居各占一个播放器，在后台悄悄缓冲前 30 秒正片——开头的赞助/片头等 SponsorBlock 片段会先跳过，从真正的内容开始缓存。焦点左右移一格就能直接复用已预热的播放器，按确认基本点开即播；预热不计入观看历史
+- **大图预览**：焦点停留约一秒，上方大图就用预热好的缓冲静音播放这个视频
 - **自动清晰度**：默认按带宽自适应（和官方 App 一样），也可以手动设上限
 - **SponsorBlock**：自动跳过赞助、片头片尾等片段，时间线上标出位置
 - **无广告**
@@ -142,7 +144,7 @@ DESIGN.md / PRODUCT.md    设计系统与产品原则
 
 ### 已知限制
 
-- YouTube 的 SABR 视频协议在每次播放会话开始时，会要求客户端等待约 4 秒，这是服务器端的限制。OpenTube 用浏览时后台预热来消化这段等待，但焦点刚移到视频上就按确认，仍可能要等 2～3 秒。
+- YouTube 的 SABR 视频协议在每次播放会话开始时，会要求客户端等待约 4 秒，这是服务器端的限制。OpenTube 用浏览时的热区预热来消化这段等待，但焦点跳到很远的视频后立刻按确认，仍可能要等几秒。未登录时 YouTube 会拦截 TV 客户端，只能退回网页客户端；登录后可能会更快。
 - 还没有频道页（点频道会搜索频道名），没有字幕。
 
 ### 致谢

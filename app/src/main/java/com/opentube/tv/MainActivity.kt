@@ -17,6 +17,6 @@ class MainActivity : ComponentActivity() {
         setContent { OpenTubeTheme { AppRoot(player) } }
     }
 
-    override fun onStop() { super.onStop(); player.exo.playWhenReady = false; player.cancelPreload() }
+    override fun onStop() { super.onStop(); player.pauseAll() }
     override fun onDestroy() { player.release(); super.onDestroy() }
 }

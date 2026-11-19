@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import android.view.SurfaceView
+import android.view.TextureView
 import com.google.android.exoplayer2.C
 import com.google.android.exoplayer2.DefaultLoadControl
 import com.google.android.exoplayer2.DefaultRenderersFactory
@@ -29,6 +30,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,6 +38,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** 清晰度选择：Auto = 按带宽自适应；否则锁定最高到指定高度 */
 sealed interface Quality {
@@ -63,11 +66,14 @@ data class PlayerState(
 /**
  * OpenTube 播放引擎，封装 SmartTube 的 ExoPlayer 2.10 fork。
  *
- * 起播速度优化：
- *  1. 播放信息走 [Prefetcher]（焦点停留即预取）；
- *  2. 低起播门槛：缓冲 0.8 秒即开播，卡顿后 2 秒恢复；
- *  3. 自适应码率默认开启，并记住上次测得的带宽作为初始估计，起播即接近合适画质；
- *  4. 视口限制在物理屏幕分辨率，避免在 1080p 电视上白白拉 4K。
+ * 起播速度：YouTube 的 SABR 协议在每个播放会话的第一个请求后，固定要求客户端等 ~4 秒（服务器按时间计，跳不过）。
+ * 所以这里维护一个小的播放器池（[POOL_SIZE] 个 ExoPlayer）：
+ *  - 遥控器焦点所在的视频和左右邻居组成“热区”，每个占一个播放器在后台开流，
+ *    从“跳过片头 SponsorBlock 片段后”的位置起缓冲 30 秒正片（不播放、不出声、不上报历史）；
+ *    几个会话的 4 秒退避并行消化；
+ *  - 焦点停留一会儿，焦点那个播放器在首页大图里静音播放预览；
+ *  - 按确认时，直接把这个播放器切到全屏、开声音，接着播。
+ * 其余优化：低起播门槛（缓冲 0.8 秒即开播）、记住上次带宽作为初始估计、视口限制在物理屏幕分辨率。
  */
 class OtPlayer(private val context: Context) {
 
@@ -78,158 +84,333 @@ class OtPlayer(private val context: Context) {
         .setInitialBitrateEstimate(prefs.getLong(KEY_BITRATE, 2_500_000L))
         .build()
 
-    private val trackSelector = DefaultTrackSelector(
-        AdaptiveTrackSelection.Factory(
-            /* minDurationForQualityIncreaseMs = */ 6_000,
-            /* maxDurationForQualityDecreaseMs = */ 20_000,
-            /* minDurationToRetainAfterDiscardMs = */ 20_000,
-            /* bandwidthFraction = */ 0.75f,
+    private val sources = MediaSources(context)
+
+    /** 池中的一个播放器 */
+    private inner class Engine(val slot: Int) {
+        val trackSelector = DefaultTrackSelector(
+            AdaptiveTrackSelection.Factory(
+                /* minDurationForQualityIncreaseMs = */ 6_000,
+                /* maxDurationForQualityDecreaseMs = */ 20_000,
+                /* minDurationToRetainAfterDiscardMs = */ 20_000,
+                /* bandwidthFraction = */ 0.75f,
+            )
+        ).apply { parameters = buildUponParameters().setViewportSizeToPhysicalDisplaySize(context, true).build() }
+
+        val loadControl = PreloadAwareLoadControl(
+            DefaultLoadControl.Builder()
+                .setBufferDurationsMs(
+                    /* minBufferMs = */ 15_000,
+                    /* maxBufferMs = */ 50_000,
+                    /* bufferForPlaybackMs = */ 800,
+                    /* bufferForPlaybackAfterRebufferMs = */ 2_000,
+                )
+                .setPrioritizeTimeOverSizeThresholds(true)
+                .createDefaultLoadControl(),
+            preloadBufferUs = PRELOAD_BUFFER_MS * 1000,
         )
-    ).apply {
-        parameters = buildUponParameters().setViewportSizeToPhysicalDisplaySize(context, true).build()
+
+        val exo: SimpleExoPlayer = ExoPlayerFactory.newSimpleInstance(
+            context,
+            DefaultRenderersFactory(context).setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON),
+            trackSelector, loadControl, null, bandwidthMeter,
+        )
+
+        /** 当前装载的视频；null = 空闲 */
+        var id: String? = null
+        var item: MediaItem? = null
+        var segments: List<SponsorSegment> = emptyList()
+        var job: Job? = null
+        var lastUsed = 0L
+        /** 已调用 prepare（后台开流中或已就绪） */
+        var prepared = false
+        var aspect = 16f / 9f
+        var height = 0
+        /** 当前绑定的画面：SurfaceView（全屏）/ TextureView（预览）/ null */
+        var boundTo: Any? = null
+        /** 开流就绪后要跳到的位置（跳过开头的 SponsorBlock 片段 / 续播点）；-1 = 无 */
+        var pendingSeek = -1L
+        var seekAt = 0L
+        var retried = 0
+
+        fun reset() {
+            job?.cancel(); job = null
+            id = null; item = null; segments = emptyList(); prepared = false; pendingSeek = -1L
+            exo.playWhenReady = false
+            exo.stop(true)
+        }
     }
 
-    private val baseLoadControl = DefaultLoadControl.Builder()
-        .setBufferDurationsMs(
-            /* minBufferMs = */ 15_000,
-            /* maxBufferMs = */ 50_000,
-            /* bufferForPlaybackMs = */ 800,
-            /* bufferForPlaybackAfterRebufferMs = */ 2_000,
-        )
-        .setPrioritizeTimeOverSizeThresholds(true)
-        .createDefaultLoadControl()
-    /** 预加载期间只缓冲几秒，避免浏览时白白下载大量数据 */
-    private val loadControl = PreloadAwareLoadControl(baseLoadControl, preloadBufferUs = 6_000_000)
+    private val engines = List(POOL_SIZE) { Engine(it) }
+    /** 正在播放页使用的播放器 */
+    private var active: Engine? = null
+    /** 正在大图里预览的播放器 */
+    private var previewEngine: Engine? = null
+    private var previewWanted: String? = null
+    private var mainSurface: SurfaceView? = null
+    private var previewSurface: TextureView? = null
 
-    val exo: SimpleExoPlayer = ExoPlayerFactory.newSimpleInstance(
-        context,
-        DefaultRenderersFactory(context).setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON),
-        trackSelector,
-        loadControl,
-        null,
-        bandwidthMeter,
-    )
-
-    private val sources = MediaSources(context)
     private val _state = MutableStateFlow(PlayerState())
     val state: StateFlow<PlayerState> = _state
 
-    private var videoId: String? = null
-    private var mediaItem: MediaItem? = null
+    private val _previewId = MutableStateFlow<String?>(null)
+    /** 已在大图里出画面的预览视频 id（大图据此把封面淡出） */
+    val previewId: StateFlow<String?> = _previewId
+
+    private val videoId get() = active?.id
     private var retries = 0
     private var loadJob: Job? = null
     private var lastReportAt = 0L
-    private var preloadedId: String? = null
-    private var preloadJob: Job? = null
     private var openedAt = 0L
     private var firstFrameLogged = false
 
-    private fun mark(step: String) = Log.i("OtTiming", "$step +${SystemClock.elapsedRealtime() - openedAt}ms id=$videoId")
+    private val sponsorCache = object : LinkedHashMap<String, List<SponsorSegment>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<SponsorSegment>>?) = size > 32
+    }
 
     var sponsorCategories: Set<String> = DEFAULT_SPONSOR_CATEGORIES
+        set(v) { field = v; sponsorCache.clear() }
+
+    private fun mark(step: String) = Log.i("OtTiming", "$step +${SystemClock.elapsedRealtime() - openedAt}ms id=$videoId")
 
     init {
-        exo.addListener(object : Player.EventListener {
+        engines.forEach { e -> listen(e) }
+        scope.launch { tickLoop() }
+    }
+
+    private fun listen(e: Engine) {
+        e.exo.addListener(object : Player.EventListener {
             override fun onPlayerStateChanged(playWhenReady: Boolean, playbackState: Int) {
-                val phase = when (playbackState) {
-                    Player.STATE_BUFFERING -> if (_state.value.phase == PlayerState.Phase.Loading) PlayerState.Phase.Loading else PlayerState.Phase.Buffering
-                    Player.STATE_READY -> if (playWhenReady) PlayerState.Phase.Playing else PlayerState.Phase.Paused
-                    Player.STATE_ENDED -> PlayerState.Phase.Ended
-                    else -> _state.value.phase
+                // SABR 在会话初始化完成前 seek 会让首个分片多等好几秒，所以等第一次就绪再跳
+                if (playbackState == Player.STATE_READY) {
+                    if (e.pendingSeek > 0) {
+                        Log.i("OtTiming", "deferred-seek slot=${e.slot} id=${e.id} to=${e.pendingSeek}")
+                        e.exo.seekTo(e.pendingSeek); e.pendingSeek = -1L; e.seekAt = SystemClock.elapsedRealtime()
+                    } else if (e.seekAt > 0) { Log.i("OtTiming", "seek-ready slot=${e.slot} +${SystemClock.elapsedRealtime() - e.seekAt}ms id=${e.id}"); e.seekAt = 0 }
                 }
+                if (e !== active) return
+                val phase = phaseOf(playWhenReady, playbackState)
                 if (playbackState == Player.STATE_READY) { retries = 0; if (!firstFrameLogged) mark("ready") }
                 if (!playWhenReady || playbackState == Player.STATE_ENDED) reportPosition()
                 _state.update { it.copy(phase = phase) }
             }
 
-            override fun onPlayerError(error: ExoPlaybackException) = handleError(error)
+            override fun onPlayerError(error: ExoPlaybackException) {
+                if (e === active) handleError(error)
+                else {
+                    val item = e.item
+                    val poPending = generateSequence<Throwable>(error) { it.cause }.any { it is SabrPoTokenError }
+                    Log.w("OtTiming", "preload error id=${e.id} poToken=$poPending")
+                    if (e === previewEngine) stopPreview()
+                    e.id?.let(Prefetcher::invalidate)
+                    e.reset()
+                    // PoToken 刚启动时还没算好，稍等再试一次；期间如果这个槽位被别的视频占用就作罢
+                    if (poPending && item != null && e.retried < 2) {
+                        val n = e.retried + 1
+                        e.id = item.videoId; e.item = item
+                        e.job = scope.launch {
+                            delay(3_000)
+                            if (e.id == item.videoId && !e.prepared && active !== e) { preload(e, item); e.retried = n }
+                        }
+                    }
+                }
+            }
 
             override fun onTracksChanged(trackGroups: TrackGroupArray, trackSelections: TrackSelectionArray) {
-                _state.update { it.copy(availableHeights = videoHeights()) }
+                if (e === active) _state.update { it.copy(availableHeights = videoHeights(e)) }
             }
         })
-        exo.addVideoListener(object : VideoListener {
+        e.exo.addVideoListener(object : VideoListener {
             override fun onRenderedFirstFrame() {
-                if (!firstFrameLogged) { firstFrameLogged = true; mark("first-frame") }
+                if (e === active && !firstFrameLogged) { firstFrameLogged = true; mark("first-frame") }
+                if (e === previewEngine && e.boundTo is TextureView) _previewId.value = e.id
             }
 
             override fun onVideoSizeChanged(width: Int, height: Int, unappliedRotationDegrees: Int, pixelWidthHeightRatio: Float) {
-                if (height > 0) _state.update { it.copy(videoAspect = width * pixelWidthHeightRatio / height, currentHeight = height) }
+                if (height <= 0) return
+                e.aspect = width * pixelWidthHeightRatio / height; e.height = height
+                if (e === active) _state.update { it.copy(videoAspect = e.aspect, currentHeight = height) }
             }
         })
-        scope.launch { tickLoop() }
     }
 
-    fun attach(surface: SurfaceView) = exo.setVideoSurfaceView(surface)
-    fun detach(surface: SurfaceView) = exo.clearVideoSurfaceView(surface)
+    private fun phaseOf(playWhenReady: Boolean, playbackState: Int) = when (playbackState) {
+        Player.STATE_BUFFERING -> if (_state.value.phase == PlayerState.Phase.Loading) PlayerState.Phase.Loading else PlayerState.Phase.Buffering
+        Player.STATE_READY -> if (playWhenReady) PlayerState.Phase.Playing else PlayerState.Phase.Paused
+        Player.STATE_ENDED -> PlayerState.Phase.Ended
+        else -> _state.value.phase
+    }
 
-    /**
-     * 浏览时的后台预热：焦点停留的视频先在后台开流（不播放、不上报、只缓冲几秒）。
-     * YouTube SABR 在会话的第一个请求后固定要求等 ~4 秒，预热把这段等待挪到用户看标题的时间里，
-     * 按下确认时多半已经有画面可播。
-     */
-    fun preload(item: MediaItem) {
-        val id = item.videoId ?: return
-        if (videoId != null || preloadedId == id) return
-        preloadJob?.cancel()
-        preloadJob = scope.launch {
-            val fi = Prefetcher.get(id) ?: return@launch
-            val r = sources.create(fi) as? MediaSources.Result.Ready ?: return@launch
-            if (videoId != null) return@launch
-            preloadedId = id
-            loadControl.preloading = true
-            exo.playWhenReady = false
-            exo.prepare(r.source, true, true)
-            val resume = resumePositionMs(item, fi.lengthSeconds?.toLongOrNull()?.times(1000) ?: 0)
-            if (resume > 0) exo.seekTo(resume)
-            Log.i("OtTiming", "preload id=$id kind=${r.kind}")
+    // ---------------- 画面绑定 ----------------
+
+    /** 全屏播放页的画面 */
+    fun attach(surface: SurfaceView) { mainSurface = surface; bindSurfaces() }
+    fun detach(surface: SurfaceView) { if (mainSurface === surface) { mainSurface = null; bindSurfaces() } }
+
+    /** 首页大图里的预览画面 */
+    fun attachPreview(view: TextureView) { previewSurface = view; bindSurfaces() }
+    fun detachPreview(view: TextureView) { if (previewSurface === view) { previewSurface = null; _previewId.value = null; bindSurfaces() } }
+
+    /** 让每块画面只绑在一个播放器上：先解绑，再绑定 */
+    private fun bindSurfaces() {
+        val want = engines.associateWith { e ->
+            when {
+                e === active -> mainSurface
+                e === previewEngine -> previewSurface
+                else -> null
+            }
+        }
+        for (e in engines) if (e.boundTo != null && e.boundTo !== want[e]) { e.exo.clearVideoSurface(); e.boundTo = null }
+        for (e in engines) {
+            val v = want[e] ?: continue
+            if (e.boundTo === v) continue
+            when (v) {
+                is SurfaceView -> e.exo.setVideoSurfaceView(v)
+                is TextureView -> e.exo.setVideoTextureView(v)
+            }
+            e.boundTo = v
         }
     }
 
-    /** 离开播放页：上报进度、停止播放，之后可以继续预热别的视频 */
-    fun close() {
-        reportPosition()
-        loadJob?.cancel()
-        videoId = null
-        mediaItem = null
-        preloadedId = null
-        exo.stop()
+    // ---------------- 热区预热与预览 ----------------
+
+    /**
+     * 浏览时调用：zone 第一个是焦点视频，后面是邻居。
+     * 已经装着这些视频的播放器保持不动，其余播放器按最久未用的顺序换装新视频。
+     */
+    fun warm(zone: List<MediaItem>) {
+        if (active != null) return
+        val wanted = zone.filter { it.videoId != null }.distinctBy { it.videoId }.take(POOL_SIZE)
+        if (wanted.isEmpty()) return
+        // 邻居先排，焦点最后插到队首
+        wanted.drop(1).forEach { Prefetcher.prefetch(it.videoId!!) }
+        Prefetcher.prefetch(wanted.first().videoId!!, urgent = true)
+
+        val now = SystemClock.elapsedRealtime()
+        val ids = wanted.map { it.videoId }
+        val free = engines.filter { it.id !in ids && it !== previewEngine }.sortedBy { it.lastUsed }.toMutableList()
+        wanted.forEachIndexed { i, item ->
+            val held = engines.firstOrNull { it.id == item.videoId }
+            if (held != null) { held.lastUsed = now - i; return@forEachIndexed }
+            val e = free.removeFirstOrNull() ?: return@forEachIndexed
+            e.lastUsed = now - i
+            preload(e, item)
+        }
     }
 
-    /** App 退到后台时停止预热 */
-    fun cancelPreload() {
-        preloadJob?.cancel()
-        if (videoId == null && preloadedId != null) { preloadedId = null; exo.stop() }
+    private fun preload(e: Engine, item: MediaItem) {
+        val id = item.videoId ?: return
+        e.reset(); e.retried = 0
+        e.id = id; e.item = item
+        e.job = scope.launch {
+            val segsAsync = async { sponsorFor(id) }
+            val fi = Prefetcher.get(id)
+            val r = fi?.let { sources.create(it) } as? MediaSources.Result.Ready
+            if (fi == null || r == null || e.id != id) { if (e.id == id) e.id = null; return@launch }
+            val segs = withTimeoutOrNull(1_500) { segsAsync.await() } ?: emptyList()
+            e.segments = segs
+            val durMs = fi.lengthSeconds?.toLongOrNull()?.times(1000) ?: 0
+            val start = skipSegmentsAt(resumePositionMs(item, durMs), segs)
+            // 目标：30 秒正片。窗口里的 SponsorBlock 片段会被跳过，它们的时长另外补上
+            val window = segs.filter { it.endMs > start && it.startMs < start + PRELOAD_BUFFER_MS }
+                .sumOf { minOf(it.endMs, start + PRELOAD_BUFFER_MS) - maxOf(it.startMs, start) }
+            e.loadControl.preloadBufferUs = (PRELOAD_BUFFER_MS + window) * 1000
+            e.loadControl.preloading = true
+            e.exo.volume = 0f
+            e.exo.playWhenReady = false
+            e.exo.prepare(r.source, true, true)
+            e.pendingSeek = start
+            e.prepared = true
+            Log.i("OtTiming", "preload slot=${e.slot} id=$id kind=${r.kind} start=${start}ms segs=${segs.size}")
+            if (previewWanted == id) beginPreview(e)
+        }
     }
+
+    /** 焦点停留够久：在大图里静音播放焦点视频 */
+    fun startPreview(videoId: String) {
+        if (active != null) return
+        previewWanted = videoId
+        engines.firstOrNull { it.id == videoId && it.prepared }?.let(::beginPreview)
+    }
+
+    private fun beginPreview(e: Engine) {
+        if (active != null || previewWanted != e.id) return
+        previewEngine?.takeIf { it !== e }?.exo?.playWhenReady = false
+        previewEngine = e
+        _previewId.value = null
+        e.exo.volume = 0f
+        e.exo.playWhenReady = true
+        bindSurfaces()
+    }
+
+    /** 焦点移走 / 离开首页：停止预览（播放器保留缓冲） */
+    fun stopPreview() {
+        previewWanted = null
+        previewEngine?.exo?.playWhenReady = false
+        previewEngine = null
+        _previewId.value = null
+        bindSurfaces()
+    }
+
+    /** App 退到后台：暂停一切，丢掉后台缓冲 */
+    fun pauseAll() {
+        stopPreview()
+        active?.exo?.playWhenReady = false
+        engines.filter { it !== active }.forEach { it.reset() }
+    }
+
+    // ---------------- 播放 ----------------
 
     /** 打开视频。startMs < 0 表示按后端记录的观看进度续播 */
     fun open(videoId: String, item: MediaItem? = null, startMs: Long = -1) {
         reportPosition()
-        val warm = preloadedId == videoId && startMs < 0 && exo.playbackState != Player.STATE_IDLE
-        preloadJob?.cancel()
-        preloadedId = null
-        loadControl.preloading = false
-        this.videoId = videoId
-        this.mediaItem = item
+        val warmEngine = if (startMs < 0) engines.firstOrNull {
+            it.id == videoId && it.prepared && it.exo.playbackState != Player.STATE_IDLE
+        } else null
+        previewWanted = null
+        previewEngine = null
+        _previewId.value = null
+
+        val e = warmEngine ?: engines.minByOrNull { it.lastUsed }!!
+        // 正式播放时其他播放器全部停下，把带宽让出来
+        engines.filter { it !== e }.forEach { it.reset() }
+        active = e
+        e.lastUsed = SystemClock.elapsedRealtime()
+        e.loadControl.preloading = false
+        e.exo.volume = 1f
         retries = 0
         openedAt = SystemClock.elapsedRealtime(); firstFrameLogged = false
-        mark("open prefetched=${Prefetcher.isReady(videoId)} preloaded=$warm")
         val prev = _state.value
         _state.value = PlayerState(quality = prev.quality, speed = prev.speed)
-        if (warm) {
-            _state.update { it.copy(availableHeights = videoHeights(), videoAspect = prev.videoAspect, currentHeight = prev.currentHeight) }
-            exo.playWhenReady = true
+        applyQuality(e, prev.quality)
+        e.exo.playbackParameters = PlaybackParameters(prev.speed)
+        bindSurfaces()
+
+        if (warmEngine != null) {
+            mark("open warm slot=${e.slot} pos=${e.exo.currentPosition}")
+            e.exo.playWhenReady = true
+            _state.update {
+                it.copy(
+                    phase = if (e.exo.playbackState == Player.STATE_READY) PlayerState.Phase.Playing else PlayerState.Phase.Loading,
+                    availableHeights = videoHeights(e), videoAspect = e.aspect, currentHeight = e.height,
+                    segments = e.segments,
+                )
+            }
         } else {
+            e.reset()
+            e.id = videoId; e.item = item; e.prepared = true
+            mark("open cold prefetched=${Prefetcher.isReady(videoId)}")
             load(startMs)
         }
-        scope.launch {
-            val segs = YouTube.sponsorSegments(videoId, sponsorCategories)
-            if (this@OtPlayer.videoId == videoId) _state.update { it.copy(segments = segs) }
+        if (e.segments.isEmpty()) scope.launch {
+            val segs = sponsorFor(videoId)
+            if (this@OtPlayer.videoId == videoId) { e.segments = segs; _state.update { it.copy(segments = segs) } }
         }
     }
 
     private fun load(startMs: Long) {
-        val id = videoId ?: return
+        val e = active ?: return
+        val id = e.id ?: return
         loadJob?.cancel()
         loadJob = scope.launch {
             val fi = Prefetcher.get(id)
@@ -242,17 +423,27 @@ class OtPlayer(private val context: Context) {
                 is MediaSources.Result.Unplayable -> _state.update { it.copy(phase = PlayerState.Phase.Error, message = r.reason ?: "该视频无法播放") }
                 is MediaSources.Result.NotYet -> _state.update { it.copy(phase = PlayerState.Phase.Error, message = r.reason ?: "直播尚未开始") }
                 is MediaSources.Result.Ready -> {
-                    exo.prepare(r.source, true, true)
+                    e.exo.prepare(r.source, true, true)
                     mark("prepare ${r.kind}")
                     val resume = when {
                         startMs >= 0 -> startMs
-                        else -> resumePositionMs(mediaItem, fi.lengthSeconds?.toLongOrNull()?.times(1000) ?: 0)
+                        else -> skipSegmentsAt(resumePositionMs(e.item, fi.lengthSeconds?.toLongOrNull()?.times(1000) ?: 0), e.segments)
                     }
-                    if (resume > 0) exo.seekTo(resume)
-                    exo.playWhenReady = true
+                    if (resume > 0) e.exo.seekTo(resume)
+                    e.exo.playWhenReady = true
                 }
             }
         }
+    }
+
+    /** 离开播放页：上报进度、停止播放，播放器回到池里 */
+    fun close() {
+        reportPosition()
+        loadJob?.cancel()
+        val e = active
+        active = null
+        e?.reset()
+        bindSurfaces()
     }
 
     private fun resumePositionMs(item: MediaItem?, durationMs: Long): Long {
@@ -263,10 +454,28 @@ class OtPlayer(private val context: Context) {
         return 0
     }
 
+    /** 起点落在 SponsorBlock 片段里（或紧挨着片段开头）就挪到片段结束；连续的片段一起跳 */
+    private fun skipSegmentsAt(startMs: Long, segs: List<SponsorSegment>): Long {
+        var pos = startMs
+        while (true) {
+            val s = segs.firstOrNull { pos >= it.startMs - 1_000 && pos < it.endMs } ?: return pos
+            pos = s.endMs
+        }
+    }
+
+    private suspend fun sponsorFor(id: String): List<SponsorSegment> {
+        if (sponsorCategories.isEmpty()) return emptyList()
+        sponsorCache[id]?.let { return it }
+        val segs = YouTube.sponsorSegments(id, sponsorCategories)
+        sponsorCache[id] = segs
+        return segs
+    }
+
     private fun handleError(error: ExoPlaybackException) {
         Log.w("OtTiming", "error retry=$retries", error)
-        val pos = exo.currentPosition
-        val id = videoId ?: return
+        val e = active ?: return
+        val pos = e.exo.currentPosition
+        val id = e.id ?: return
         val cause = generateSequence<Throwable>(error) { it.cause }.toList()
         val reload = cause.firstNotNullOfOrNull { it as? SabrReloadPlayerError }
         val needsNewClient = cause.any {
@@ -291,30 +500,37 @@ class OtPlayer(private val context: Context) {
         }
     }
 
-    fun togglePlay() { exo.playWhenReady = !exo.playWhenReady }
-    fun seekBy(deltaMs: Long) = seekTo(exo.currentPosition + deltaMs)
+    fun togglePlay() { active?.exo?.let { it.playWhenReady = !it.playWhenReady } }
+    fun seekBy(deltaMs: Long) { val x = active?.exo ?: return; seekTo(x.currentPosition + deltaMs) }
     fun seekTo(ms: Long) {
-        val d = exo.duration.takeIf { it != C.TIME_UNSET } ?: Long.MAX_VALUE
-        exo.seekTo(ms.coerceIn(0, d))
+        val x = active?.exo ?: return
+        val d = x.duration.takeIf { it != C.TIME_UNSET } ?: Long.MAX_VALUE
+        x.seekTo(ms.coerceIn(0, d))
         reportPosition()
     }
 
     fun setSpeed(speed: Float) {
-        exo.playbackParameters = PlaybackParameters(speed)
+        active?.exo?.playbackParameters = PlaybackParameters(speed)
         _state.update { it.copy(speed = speed) }
     }
 
     /** 自动模式下的画质上限（设置项）。0 = 不限，仍受屏幕分辨率约束 */
     var maxHeightCap: Int = 0
-        set(v) { field = v; if (_state.value.quality == Quality.Auto) setQuality(Quality.Auto) }
+        set(v) { field = v; engines.forEach { e -> applyQuality(e, if (e === active) _state.value.quality else Quality.Auto) } }
 
     fun setQuality(q: Quality) {
-        val b = trackSelector.buildUponParameters().clearSelectionOverrides()
+        val e = active ?: return
+        applyQuality(e, q)
+        _state.update { it.copy(quality = q) }
+    }
+
+    private fun applyQuality(e: Engine, q: Quality) {
+        val b = e.trackSelector.buildUponParameters().clearSelectionOverrides()
             .setViewportSizeToPhysicalDisplaySize(context, true)
             .setMaxVideoSize(Int.MAX_VALUE, if (maxHeightCap > 0 && q == Quality.Auto) maxHeightCap else Int.MAX_VALUE)
         if (q is Quality.Max) {
-            // 2.10 没有 minVideoSize：直接覆盖选择该高度的轨道（同一轨道组内，可保留帧率/码率差异间的自适应）
-            val info = trackSelector.currentMappedTrackInfo
+            // 2.10 没有 minVideoSize：直接覆盖选择该高度的轨道
+            val info = e.trackSelector.currentMappedTrackInfo
             if (info != null) for (r in 0 until info.rendererCount) {
                 if (info.getRendererType(r) != C.TRACK_TYPE_VIDEO) continue
                 val groups = info.getTrackGroups(r)
@@ -327,12 +543,11 @@ class OtPlayer(private val context: Context) {
                 }
             }
         }
-        trackSelector.parameters = b.build()
-        _state.update { it.copy(quality = q) }
+        e.trackSelector.parameters = b.build()
     }
 
-    private fun videoHeights(): List<Int> {
-        val info = trackSelector.currentMappedTrackInfo ?: return emptyList()
+    private fun videoHeights(e: Engine): List<Int> {
+        val info = e.trackSelector.currentMappedTrackInfo ?: return emptyList()
         val heights = sortedSetOf<Int>(compareByDescending { it })
         for (r in 0 until info.rendererCount) {
             if (info.getRendererType(r) != C.TRACK_TYPE_VIDEO) continue
@@ -345,47 +560,60 @@ class OtPlayer(private val context: Context) {
         return heights.toList()
     }
 
-    /** 每 250ms：刷新进度、执行 SponsorBlock 跳过、定期上报观看记录 */
+    /** 每 250ms：刷新进度、执行 SponsorBlock 跳过（播放页和预览都跳）、定期上报观看记录 */
     private suspend fun tickLoop() {
         while (scope.isActive) {
             delay(250)
-            if (videoId == null) continue
-            val pos = exo.currentPosition
-            val dur = exo.duration.takeIf { it != C.TIME_UNSET } ?: 0
-            _state.update { it.copy(positionMs = pos, durationMs = dur, bufferedMs = exo.bufferedPosition) }
-
-            if (exo.playWhenReady && exo.playbackState == Player.STATE_READY) {
-                // 只在刚进入片段的 2 秒窗口内跳过，用户手动 seek 到片段中间不会被拽走
-                val window = (2_000 * exo.playbackParameters.speed).toLong()
-                val seg = _state.value.segments.firstOrNull { pos >= it.startMs && pos <= minOf(it.startMs + window, it.endMs) }
-                if (seg != null) {
-                    exo.seekTo(if (dur > 0) minOf(seg.endMs, dur) else seg.endMs)
-                    _state.update { it.copy(lastSkipped = seg) }
-                }
+            previewEngine?.let { skipSponsor(it) }
+            val e = active ?: continue
+            val x = e.exo
+            val pos = x.currentPosition
+            val dur = x.duration.takeIf { it != C.TIME_UNSET } ?: 0
+            _state.update { it.copy(positionMs = pos, durationMs = dur, bufferedMs = x.bufferedPosition) }
+            if (x.playWhenReady && x.playbackState == Player.STATE_READY) {
+                skipSponsor(e)?.let { seg -> _state.update { it.copy(lastSkipped = seg) } }
                 if (System.currentTimeMillis() - lastReportAt > 3 * 60_000) reportPosition()
             }
         }
     }
 
+    /** 只在刚进入片段的 2 秒窗口内跳过，用户手动 seek 到片段中间不会被拽走 */
+    private fun skipSponsor(e: Engine): SponsorSegment? {
+        val x = e.exo
+        if (!x.playWhenReady || x.playbackState != Player.STATE_READY) return null
+        val pos = x.currentPosition
+        val dur = x.duration.takeIf { it != C.TIME_UNSET } ?: 0
+        val window = (2_000 * x.playbackParameters.speed).toLong()
+        val segs = if (e === active) _state.value.segments.ifEmpty { e.segments } else e.segments
+        val seg = segs.firstOrNull { pos >= it.startMs && pos <= minOf(it.startMs + window, it.endMs) } ?: return null
+        x.seekTo(if (dur > 0) minOf(seg.endMs, dur) else seg.endMs)
+        return seg
+    }
+
     fun clearSkipNotice() = _state.update { it.copy(lastSkipped = null) }
 
     private fun reportPosition() {
-        val id = videoId ?: return
-        val pos = exo.currentPosition
+        val e = active ?: return
+        val id = e.id ?: return
+        val pos = e.exo.currentPosition
         if (pos <= 0) return
         lastReportAt = System.currentTimeMillis()
-        runCatching { YouTube.reportPosition(mediaItem, id, pos) }
+        runCatching { YouTube.reportPosition(e.item, id, pos) }
     }
 
     fun release() {
         reportPosition()
         bandwidthMeter.bitrateEstimate.takeIf { it > 0 }?.let { prefs.edit().putLong(KEY_BITRATE, it).apply() }
         scope.cancel()
-        exo.release()
+        engines.forEach { it.exo.release() }
     }
 
     companion object {
         private const val KEY_BITRATE = "bitrate_estimate"
+        /** 热区大小：焦点 + 左右邻居 */
+        const val POOL_SIZE = 3
+        /** 每个热区视频预先缓冲的正片时长 */
+        private const val PRELOAD_BUFFER_MS = 30_000L
         val DEFAULT_SPONSOR_CATEGORIES = setOf(
             SponsorSegment.CATEGORY_SPONSOR, SponsorSegment.CATEGORY_INTRO, SponsorSegment.CATEGORY_OUTRO,
             SponsorSegment.CATEGORY_SELF_PROMO, SponsorSegment.CATEGORY_INTERACTION,

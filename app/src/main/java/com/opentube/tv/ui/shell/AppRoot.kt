@@ -85,7 +85,7 @@ fun AppRoot(player: OtPlayer) {
             NavRail(tab, onSelect = { tab = it }, modifier = Modifier.onFocusChanged { railFocused = it.hasFocus })
             Box(Modifier.fillMaxHeight().width(1.dp).background(Film.Seam))
             Box(Modifier.fillMaxSize()) {
-              CompositionLocalProvider(LocalAllowAutoFocus provides !railFocused, com.opentube.tv.ui.components.LocalPreload provides player::preload) {
+              CompositionLocalProvider(LocalAllowAutoFocus provides !railFocused, com.opentube.tv.ui.components.LocalPlayer provides player) {
                 when (tab) {
                     Tab.Home -> FeedScreen(home, "首页还是空的", "登录后这里会显示为你推荐的视频", open, signIn)
                     Tab.Subscriptions -> FeedScreen(subs, "还没有订阅内容", "登录账号后显示你订阅频道的新视频", open, signIn)

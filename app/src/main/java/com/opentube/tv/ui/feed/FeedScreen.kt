@@ -41,7 +41,6 @@ fun FeedScreen(
     onSignIn: (() -> Unit)? = null,
 ) {
     val state by vm.state.collectAsState()
-    var focused by remember { mutableStateOf<MediaItem?>(null) }
     var heroItem by remember { mutableStateOf<MediaItem?>(null) }
     val firstFrame = remember { FocusRequester() }
     var gaveInitialFocus by remember { mutableStateOf(false) }
@@ -50,13 +49,17 @@ fun FeedScreen(
         if (state.strips.isNotEmpty() && !gaveInitialFocus && allowAuto) { delay(50); gaveInitialFocus = runCatching { firstFrame.requestFocus() }.isSuccess }
     }
 
-    // 焦点停留 180ms 换大图，350ms 起预取播放信息并后台预热播放（提前消化 SABR 起播的 ~4 秒退避）
-    val preload = com.opentube.tv.ui.components.LocalPreload.current
-    LaunchedEffect(focused) {
-        val f = focused ?: return@LaunchedEffect
+    // 焦点停留 180ms 换大图；350ms 起热区（焦点+左右邻居）后台开流缓冲 30 秒；1.5 秒后大图静音预览
+    val player = com.opentube.tv.ui.components.LocalPlayer.current
+    var zone by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+    LaunchedEffect(zone) {
+        val f = zone.firstOrNull() ?: return@LaunchedEffect
+        player?.stopPreview()
         delay(180); heroItem = f
-        delay(170); f.videoId?.let(Prefetcher::prefetch); preload(f)
+        delay(170); player?.warm(zone)
+        delay(1_150); f.videoId?.let { player?.startPreview(it) }
     }
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { player?.stopPreview() } }
     LaunchedEffect(state.strips.isNotEmpty()) {
         if (heroItem == null) heroItem = state.strips.firstOrNull()?.items?.firstOrNull()
     }
@@ -70,7 +73,7 @@ fun FeedScreen(
             onAction = if (!state.signedIn && onSignIn != null) onSignIn else vm::reload,
         )
         else -> Column(Modifier.fillMaxSize()) {
-            Hero(heroItem, height = 230.dp, modifier = Modifier.padding(start = Dims.SafeH, end = Dims.SafeH, top = Dims.SafeV))
+            Hero(heroItem, height = 230.dp, player = player, modifier = Modifier.padding(start = Dims.SafeH, end = Dims.SafeH, top = Dims.SafeV))
             // 获焦的是缩略图，顶到最上沿会把这一行的页眉和红框上边挤到大图下面；留出页眉高度
             val lead = with(androidx.compose.ui.platform.LocalDensity.current) { Dims.StripHeader.toPx() }
             CompositionLocalProvider(LocalBringIntoViewSpec provides remember(lead) { PivotSpec(0f, leadPx = lead) }) {
@@ -84,7 +87,7 @@ fun FeedScreen(
                             firstFrameFocus = if (strip.id == state.strips.first().id) firstFrame else null,
                             title = strip.title,
                             items = strip.items,
-                            onFocused = { focused = it },
+                            onZone = { zone = it },
                             onClick = onOpen,
                             onNearEnd = { vm.loadMore(strip) },
                         )

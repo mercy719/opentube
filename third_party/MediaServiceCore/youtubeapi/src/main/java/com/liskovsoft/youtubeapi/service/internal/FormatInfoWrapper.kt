@@ -140,6 +140,7 @@ internal object FormatInfoWrapper {
 
             val result = getProvider(nextClient)(nextClient.first, videoId, clickTrackingParams)
 
+            android.util.Log.i("OtTiming", "formatInfo client=${nextClient.first} sabr=${result?.containsSabrFormats()} dash=${result?.containsDashFormats()} unplayable=${result?.isUnplayable()}")
             if (result != null && infoTester(result)) {
                 persistRecentTypeIfNeeded(nextClient, result)
                 return result
@@ -199,6 +200,9 @@ internal object FormatInfoWrapper {
     }
 
     private fun getClient(): Pair<AppClient, ProviderType> {
+        // OPENTUBE: 未登录时 TV/TV_SAMSUNG 一律返回“请登录以确认你不是机器人”，每个视频都先撞一遍要白花 1.5～2.5 秒。
+        // 未登录就从上次成功的客户端开始；登录后仍从 TV（列表第一位）开始。
+        if (mNextClient == null && !getSignInService().isSigned) mActualClient?.let { return it }
         return mNextClient ?: CLIENT_LIST[0]
     }
 

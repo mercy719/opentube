@@ -128,8 +128,9 @@ fun SearchScreen(vm: SearchViewModel, onOpen: (MediaItem) -> Unit) {
         if (pendingFocusResults && results.isNotEmpty()) { delay(80); runCatching { firstResult.requestFocus() }; pendingFocusResults = false }
     }
 
-    val preload = com.opentube.tv.ui.components.LocalPreload.current
-    LaunchedEffect(focused) { val f = focused ?: return@LaunchedEffect; delay(450); f.videoId?.let(Prefetcher::prefetch); preload(f) }
+    val player = com.opentube.tv.ui.components.LocalPlayer.current
+    var zone by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+    LaunchedEffect(zone) { if (zone.isNotEmpty()) { delay(350); player?.warm(zone) } }
     val allowAuto = com.opentube.tv.ui.components.LocalAllowAutoFocus.current
     LaunchedEffect(Unit) { if (results.isEmpty() && allowAuto) runCatching { fieldFocus.requestFocus() } }
 
@@ -185,7 +186,7 @@ fun SearchScreen(vm: SearchViewModel, onOpen: (MediaItem) -> Unit) {
                     contentPadding = PaddingValues(bottom = 200.dp),
                 ) {
                     items(results, key = { it.id }) { strip ->
-                        FilmStrip(strip.title, strip.items, onFocused = { focused = it }, onClick = onOpen, onNearEnd = { vm.loadMore(strip) },
+                        FilmStrip(strip.title, strip.items, onFocused = { focused = it }, onZone = { zone = it }, onClick = onOpen, onNearEnd = { vm.loadMore(strip) },
                             firstFrameFocus = if (strip.id == results.first().id) firstResult else null)
                     }
                 }

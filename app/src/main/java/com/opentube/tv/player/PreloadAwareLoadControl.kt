@@ -7,7 +7,7 @@ import com.google.android.exoplayer2.trackselection.TrackSelectionArray
 import com.google.android.exoplayer2.upstream.Allocator
 
 /** 包一层 LoadControl：预加载模式下缓冲到 [preloadBufferUs] 就停，正式播放时完全交给原策略 */
-class PreloadAwareLoadControl(private val base: LoadControl, private val preloadBufferUs: Long) : LoadControl {
+class PreloadAwareLoadControl(private val base: LoadControl, @Volatile var preloadBufferUs: Long) : LoadControl {
     @Volatile var preloading = false
 
     override fun onPrepared() = base.onPrepared()

@@ -2,6 +2,13 @@ package com.opentube.tv.ui.components
 
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.viewinterop.AndroidView
+import android.view.TextureView
+import com.opentube.tv.player.OtPlayer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,18 +41,34 @@ import com.liskovsoft.mediaserviceinterfaces.data.MediaItem
 import com.opentube.tv.ui.theme.Film
 import com.opentube.tv.ui.theme.Type
 
-/** 上半屏：焦点那一格的放大印样 + 片名与事实 */
+/**
+ * 上半屏：焦点那一格的放大印样 + 片名与事实。
+ * 焦点停留一会儿后，热区播放器在这里静音播放预览：视频画在封面下面的 TextureView 上，出画面后封面淡出。
+ */
 @OptIn(ExperimentalGlideComposeApi::class)
 @Composable
-fun Hero(item: MediaItem?, height: Dp, modifier: Modifier = Modifier) {
+fun Hero(item: MediaItem?, height: Dp, modifier: Modifier = Modifier, player: OtPlayer? = null) {
+    val previewId = player?.previewId?.collectAsState()?.value
+    val previewing = previewId != null && previewId == item?.videoId
+    val posterAlpha by animateFloatAsState(if (previewing) 0f else 1f, tween(if (previewing) 450 else 150), label = "poster")
     Row(modifier.height(height), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
-        Box(Modifier.fillMaxHeight().aspectRatio(16f / 9f).clip(RoundedCornerShape(3.dp)).background(Film.Rebate)) {
-            Crossfade(item?.videoId, animationSpec = tween(220), label = "hero") { id ->
+        Box(Modifier.fillMaxHeight().aspectRatio(16f / 9f).clip(RoundedCornerShape(3.dp)).background(Film.Base)) {
+            if (player != null) AndroidView(
+                factory = { ctx -> TextureView(ctx).also(player::attachPreview) },
+                onRelease = { player.detachPreview(it) },
+                modifier = Modifier.fillMaxSize(),
+            )
+            Crossfade(item?.videoId, animationSpec = tween(220), label = "hero", modifier = Modifier.alpha(posterAlpha)) { id ->
                 if (id != null) GlideImage(
                     model = item?.heroImageUrl(), contentDescription = null,
-                    contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().background(Film.Rebate),
                 ) { it.thumbnail(it.clone().load(item?.cardUrl())) }
             }
+            if (previewing) Text(
+                "预览 · 静音", style = Type.Label.copy(color = Film.Edge),
+                modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
+                    .background(Film.Base.copy(alpha = 0.7f), RoundedCornerShape(2.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+            )
         }
         if (item != null) Column(Modifier.padding(top = 10.dp).weight(1f)) {
             Text(item.channelName(), style = Type.Meta.copy(fontSize = Type.Body1.fontSize), maxLines = 1)

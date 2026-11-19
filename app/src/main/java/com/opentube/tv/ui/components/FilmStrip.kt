@@ -58,6 +58,8 @@ fun FilmStrip(
     items: List<MediaItem>,
     modifier: Modifier = Modifier,
     onFocused: (MediaItem) -> Unit = {},
+    /** 焦点变化时报告热区：[焦点, 右邻, 左邻] */
+    onZone: (List<MediaItem>) -> Unit = {},
     onClick: (MediaItem) -> Unit,
     onNearEnd: () -> Unit = {},
     firstFrameFocus: androidx.compose.ui.focus.FocusRequester? = null,
@@ -92,7 +94,7 @@ fun FilmStrip(
                         item = item,
                         index = i,
                         modifier = if (i == 0 && firstFrameFocus != null) Modifier.focusRequester(firstFrameFocus) else Modifier,
-                        onFocused = { focusedIndex = i; onFocused(item) },
+                        onFocused = { focusedIndex = i; onFocused(item); onZone(listOfNotNull(item, items.getOrNull(i + 1), items.getOrNull(i - 1))) },
                         onClick = { onClick(item) },
                     )
                 }
