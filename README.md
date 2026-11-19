@@ -1,3 +1,5 @@
+<img src="docs/icon.png" width="96" align="right" alt="OpenTube icon">
+
 # OpenTube
 
 [English](#english) · [简体中文](#简体中文)
