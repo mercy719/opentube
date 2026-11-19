@@ -75,12 +75,6 @@ fun FilmStrip(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(title, style = Type.RowTitle)
-            Spacer(Modifier.width(12.dp))
-            Text("01 → %02d".format(items.size), style = Type.EdgePrint)
-            if (focusedIndex >= 0) {
-                Spacer(Modifier.width(12.dp))
-                Text("▸ %02d".format(focusedIndex + 1), style = Type.EdgePrint.copy(color = Film.Grease))
-            }
         }
         val margin = with(androidx.compose.ui.platform.LocalDensity.current) { Dims.SafeH.toPx() }
         CompositionLocalProvider(LocalBringIntoViewSpec provides remember(margin) { PivotSpec(marginPx = margin) }) {
@@ -142,15 +136,9 @@ fun Frame(item: MediaItem, index: Int, onFocused: () -> Unit, onClick: () -> Uni
         }
         Row(Modifier.fillMaxWidth().padding(top = 5.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "%02d".format(index + 1),
-                style = Type.FrameNo.copy(color = if (focused) Film.Grease else Film.Edge3),
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
                 item.channelName(),
                 style = Type.Label, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
-                textAlign = androidx.compose.ui.text.style.TextAlign.End,
             )
         }
         Text(

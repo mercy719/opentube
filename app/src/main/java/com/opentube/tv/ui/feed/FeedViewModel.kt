@@ -77,8 +77,7 @@ class FeedViewModel(private val kind: FeedKind) : ViewModel() {
     private fun publishFlat() {
         val title = if (kind == FeedKind.Subscriptions) "订阅更新" else "观看记录"
         val strips = flatItems.chunked(CHUNK).mapIndexed { i, chunk ->
-            val from = i * CHUNK + 1
-            Strip("$title-$i", "$title  %02d–%02d".format(from, from + chunk.size - 1), chunk, null)
+            Strip("$title-$i", if (i == 0) title else "更早", chunk, null)
         }
         _state.update { it.copy(strips = strips, loading = false) }
     }
