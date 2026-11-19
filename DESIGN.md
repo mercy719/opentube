@@ -26,7 +26,7 @@ SponsorBlock 分类线色（来自地铁线路图的分色纪律）：赞助 `#4
 ## 字体
 
 - 中文与正文：系统 Noto Sans CJK（`FontFamily.Default`）。
-- 数字、帧号、时长、片边印字、登录码：Barlow Semi Condensed（Medium / SemiBold / Bold，OFL，打包在 `res/font/`）。
+- 数字、帧号、时长、片边印字、登录码：Barlow Semi Condensed（Medium / SemiBold / Bold，OFL，打包在 `app/src/main/res/font/`）。
 - 字号阶梯（sp，1080p 电视 = 960×540dp）：HeroTitle 30 / ScreenTitle 24 / RowTitle 15 / Body 14 / CardTitle 13 / Meta 13 / Label 11 / FrameNo 11 / BigCode 56。
 
 ## 布局
@@ -59,5 +59,5 @@ SponsorBlock 分类线色（来自地铁线路图的分色纪律）：赞助 `#4
 
 - 字体：Barlow Semi Condensed，Google Fonts（SIL OFL 1.1）。
 - 图标：Material Icons Extended。
-- TV Banner：`res/drawable/banner.xml` 矢量占位，待替换为正式图标。
+- TV Banner：`app/src/main/res/drawable/banner.xml` 矢量占位，待替换为正式图标。
 - 应用内无其他位图资源；所有缩略图来自 YouTube（`i.ytimg.com`）。
