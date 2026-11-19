@@ -138,9 +138,10 @@ internal object FormatInfoWrapper {
             // NOTE: History fix. CPN should be unique per each /player fetch
             AppService.instance().resetClientPlaybackNonce()
 
+            val t0 = android.os.SystemClock.elapsedRealtime()
             val result = getProvider(nextClient)(nextClient.first, videoId, clickTrackingParams)
 
-            android.util.Log.i("OtTiming", "formatInfo client=${nextClient.first} sabr=${result?.containsSabrFormats()} dash=${result?.containsDashFormats()} unplayable=${result?.isUnplayable()}")
+            android.util.Log.i("OtTiming", "formatInfo id=$videoId client=${nextClient.first} sabr=${result?.containsSabrFormats()} dash=${result?.containsDashFormats()} unplayable=${result?.isUnplayable()} ${android.os.SystemClock.elapsedRealtime() - t0}ms")
             if (result != null && infoTester(result)) {
                 persistRecentTypeIfNeeded(nextClient, result)
                 return result
