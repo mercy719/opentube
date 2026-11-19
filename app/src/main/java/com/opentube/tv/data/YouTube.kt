@@ -1,5 +1,6 @@
 package com.opentube.tv.data
 
+import com.liskovsoft.mediaserviceinterfaces.data.CommentGroup
 import com.liskovsoft.mediaserviceinterfaces.data.MediaGroup
 import com.liskovsoft.mediaserviceinterfaces.data.MediaItem
 import com.liskovsoft.mediaserviceinterfaces.data.MediaItemFormatInfo
@@ -40,6 +41,9 @@ object YouTube {
     }
 
     suspend fun metadata(videoId: String): MediaItemMetadata? = items.getMetadataObserve(videoId).awaitFirstOrNull()
+
+    /** 评论分页：首页 key 来自 metadata.commentsKey；下一页用 nextCommentsKey；回复用 nestedCommentsKey */
+    suspend fun comments(key: String): CommentGroup? = service.commentsService.getCommentsObserve(key).awaitFirstOrNull()
 
     suspend fun sponsorSegments(videoId: String, categories: Set<String>): List<SponsorSegment> =
         runCatching { items.getSponsorSegmentsObserve(videoId, categories).awaitFirstOrNull().orEmpty() }.getOrDefault(emptyList())

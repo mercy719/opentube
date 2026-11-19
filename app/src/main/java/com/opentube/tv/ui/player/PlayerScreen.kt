@@ -28,12 +28,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.automirrored.outlined.Comment
 import androidx.compose.material.icons.outlined.HighQuality
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -43,6 +46,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -78,7 +83,7 @@ import com.opentube.tv.ui.theme.Film
 import com.opentube.tv.ui.theme.Type
 import kotlinx.coroutines.delay
 
-private enum class Panel { None, Quality, Speed }
+private enum class Panel { None, Quality, Speed, Comments }
 
 @OptIn(ExperimentalGlideComposeApi::class)
 @Composable
@@ -90,6 +95,9 @@ fun PlayerScreen(player: OtPlayer, item: MediaItem, onExit: () -> Unit) {
     var everPlayed by remember { mutableStateOf(false) }
     val rootFocus = remember { FocusRequester() }
     val playFocus = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
+    val comments = remember(item.videoId) { CommentsState(scope, item.videoId) }
+    val videoEnd by animateDpAsState(if (panel == Panel.Comments) CommentsWidth else 0.dp, label = "videoEnd")
 
     LaunchedEffect(item.videoId) { everPlayed = false; player.open(item.videoId, item) }
     LaunchedEffect(st.phase) { if (st.phase == Phase.Playing) everPlayed = true }
@@ -98,20 +106,31 @@ fun PlayerScreen(player: OtPlayer, item: MediaItem, onExit: () -> Unit) {
         if (overlay && panel == Panel.None && st.phase == Phase.Playing) { delay(4_000); overlay = false; runCatching { rootFocus.requestFocus() } }
     }
     LaunchedEffect(overlay) { if (overlay) runCatching { playFocus.requestFocus() } else runCatching { rootFocus.requestFocus() } }
+    // 侧栏收起后把焦点还给控制层（控制层可能刚重新出现，等一帧）
+    LaunchedEffect(panel) {
+        if (panel == Panel.None) { delay(60); runCatching { if (overlay) playFocus.requestFocus() else rootFocus.requestFocus() } }
+    }
     LaunchedEffect(st.lastSkipped) { if (st.lastSkipped != null) { delay(3_500); player.clearSkipNotice() } }
     DisposableEffect(Unit) { onDispose { player.exo.stop() } }
 
-    BackHandler {
+    fun onBack() {
         when {
+            panel == Panel.Comments && comments.thread != null -> comments.closeThread()
             panel != Panel.None -> panel = Panel.None
             overlay && st.phase == Phase.Playing -> overlay = false
             else -> onExit()
         }
     }
+    BackHandler { onBack() }
 
     Box(
         Modifier.fillMaxSize().background(Color.Black)
             .onPreviewKeyEvent { ev ->
+                // 返回键自己处理：否则 Compose 会把它当成“焦点退出”吞掉，侧栏收不起来
+                if (ev.key.nativeKeyCode == AKeyEvent.KEYCODE_BACK) {
+                    if (ev.type == KeyEventType.KeyUp) onBack()
+                    return@onPreviewKeyEvent true
+                }
                 if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 lastInput = System.currentTimeMillis()
                 val code = ev.key.nativeKeyCode
@@ -129,11 +148,11 @@ fun PlayerScreen(player: OtPlayer, item: MediaItem, onExit: () -> Unit) {
             .focusRequester(rootFocus).focusable(),
     ) {
         // 画面
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize().padding(end = videoEnd), contentAlignment = Alignment.Center) {
             AndroidView(
                 factory = { ctx -> SurfaceView(ctx).also(player::attach) },
                 onRelease = { player.detach(it) },
-                modifier = Modifier.fillMaxHeight().aspectRatio(st.videoAspect.coerceIn(0.5f, 3f), matchHeightConstraintsFirst = true),
+                modifier = Modifier.aspectRatio(st.videoAspect.coerceIn(0.5f, 3f)),
             )
         }
 
@@ -171,7 +190,7 @@ fun PlayerScreen(player: OtPlayer, item: MediaItem, onExit: () -> Unit) {
         }
 
         // 控制层
-        AnimatedVisibility(everPlayed && overlay, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomStart)) {
+        AnimatedVisibility(everPlayed && overlay && panel != Panel.Comments, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.BottomStart)) {
             Controls(
                 item = item, st = st,
                 playFocus = playFocus,
@@ -179,6 +198,7 @@ fun PlayerScreen(player: OtPlayer, item: MediaItem, onExit: () -> Unit) {
                 onSeek = { player.seekBy(it); lastInput = System.currentTimeMillis() },
                 onQuality = { panel = Panel.Quality },
                 onSpeed = { panel = Panel.Speed },
+                onComments = { panel = Panel.Comments },
             )
         }
 
@@ -199,6 +219,7 @@ fun PlayerScreen(player: OtPlayer, item: MediaItem, onExit: () -> Unit) {
                     options = SPEEDS.map { (if (it == 1f) "正常" else "${it}×") to (st.speed == it) },
                     onPick = { i -> player.setSpeed(SPEEDS[i]); panel = Panel.None },
                 )
+                Panel.Comments -> CommentsPanel(comments)
                 Panel.None -> {}
             }
         }
@@ -210,7 +231,7 @@ private val SPEEDS = listOf(0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
 @Composable
 private fun Controls(
     item: MediaItem, st: PlayerState, playFocus: FocusRequester,
-    onToggle: () -> Unit, onSeek: (Long) -> Unit, onQuality: () -> Unit, onSpeed: () -> Unit,
+    onToggle: () -> Unit, onSeek: (Long) -> Unit, onQuality: () -> Unit, onSpeed: () -> Unit, onComments: () -> Unit,
 ) {
     Column(
         Modifier.fillMaxWidth()
@@ -228,6 +249,7 @@ private fun Controls(
             val q = when (val q = st.quality) { Quality.Auto -> if (st.currentHeight > 0) "自动 · ${st.currentHeight}p" else "自动"; is Quality.Max -> "${q.height}p" }
             PillButton(q, onClick = onQuality, icon = Icons.Outlined.HighQuality, primary = false)
             PillButton(if (st.speed == 1f) "正常速度" else "${st.speed}×", onClick = onSpeed, icon = Icons.Outlined.Speed, primary = false)
+            PillButton("评论", onClick = onComments, icon = Icons.AutoMirrored.Outlined.Comment, primary = false)
             Spacer(Modifier.weight(1f))
             if (st.segments.isNotEmpty()) Text("SponsorBlock 已标记 ${st.segments.size} 段", style = Type.Label)
         }
@@ -304,12 +326,16 @@ private fun categoryName(c: String) = when (c) {
     "interaction" -> "求关注提醒"; "music_offtopic" -> "非音乐部分"; "preview" -> "预告回顾"; else -> "片段"
 }
 
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 private fun OptionPanel(title: String, options: List<Pair<String, Boolean>>, note: String? = null, onPick: (Int) -> Unit) {
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
     Column(
-        Modifier.fillMaxHeight().width(260.dp).background(Film.Rebate).padding(horizontal = 24.dp, vertical = Dims.SafeV),
+        Modifier.fillMaxHeight().width(260.dp).background(Film.Rebate)
+            // 焦点不许跑出面板（返回键已在根节点预处理，不会被这里吞掉）
+            .focusProperties { exit = { FocusRequester.Cancel } }.focusGroup()
+            .padding(horizontal = 24.dp, vertical = Dims.SafeV),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(title, style = Type.ScreenTitle)
