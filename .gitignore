@@ -8,3 +8,4 @@ local.properties
 captures/
 .kotlin/
 .impeccable/mocks/
+.impeccable/review/
