@@ -29,6 +29,16 @@ internal object CommentsServiceInt {
         likeParam?.let { getActionResult(it) }
     }
 
+    /** OPENTUBE: 用评论自带的 like/unlike 参数直接操作，不再借道回复列表 */
+    fun setLike(item: com.liskovsoft.youtubeapi.comments.impl.CommentItemImpl, like: Boolean) {
+        val w = item.commentItemWrapper
+        val renderer = w.commentThreadRenderer?.comment?.commentRenderer ?: w.commentRenderer
+            ?: throw IllegalStateException("no comment renderer")
+        val param = (if (like) renderer.getLikeParams() else renderer.getUnLikeParams())
+            ?: throw IllegalStateException("no like params")
+        getActionResult(param) ?: throw IllegalStateException("like action failed")
+    }
+
     private fun getCommentsResult(commentsKey: String) = RetrofitHelper.get(mApi.getComments(CommentsApiParams.getCommentsQuery(commentsKey)))
 
     private fun getActionResult(actionKey: String) = RetrofitHelper.get(mApi.commentAction(CommentsApiParams.getActionQuery(actionKey)))

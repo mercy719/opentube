@@ -20,3 +20,4 @@ OpenTube 复用其 YouTube 后端与播放内核，UI 层完全重写。
 5. 根 `build.gradle` 覆盖了部分常量：Kotlin 2.0.21、compileSdk 35。okhttp 必须保持上游的 3.12.x，后端多个库依赖其内部 API，升级到 4.x 会在运行时失败。
 
 同步上游时，请重新应用以上改动。
+- `CommentsService.setLikeObserve(item, like)`（接口 + `YouTubeCommentsService` + `CommentsServiceInt.setLike`）：用评论自带的 like/unlike 参数直接点赞，原来的 `toggleLikeObserve(nestedKey)` 只对有回复的评论有效。

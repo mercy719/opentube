@@ -45,6 +45,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Surface
+import androidx.tv.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ThumbUp
+import androidx.compose.material.icons.outlined.ThumbUp
+import androidx.compose.runtime.mutableStateMapOf
+import kotlinx.coroutines.delay
 import androidx.tv.material3.Text
 import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
 import com.bumptech.glide.integration.compose.GlideImage
@@ -116,6 +122,43 @@ class CommentsState(private val scope: CoroutineScope, videoId: String) {
     }
 
     fun closeThread() { thread = null }
+
+    /** 点赞：先改界面，失败再改回来 */
+    val liked = mutableStateMapOf<String, Boolean>()
+    var notice by mutableStateOf<String?>(null); private set
+    private var noticeJob: Job? = null
+
+    fun isLiked(c: CommentItem) = c.id?.let { liked[it] } ?: c.isLiked
+
+    fun toggleLike(c: CommentItem) {
+        val id = c.id ?: return
+        if (!YouTube.signIn.isSigned) { say("登录后才能点赞"); return }
+        val want = !isLiked(c)
+        liked[id] = want
+        scope.launch {
+            runCatching { YouTube.likeComment(c, want) }
+                .onSuccess { say(if (want) "已点赞" else "已取消点赞") }
+                .onFailure { liked[id] = !want; say("点赞没成功，稍后再试") }
+        }
+    }
+
+    private fun say(text: String) {
+        notice = text
+        noticeJob?.cancel()
+        noticeJob = scope.launch { delay(2_500); notice = null }
+    }
+}
+
+/** 显示用的点赞数：能解析成整数就跟着加减，否则保持原文 */
+private fun likeText(c: CommentItem, likedNow: Boolean): String? {
+    val base = c.likeCount?.trim()?.takeIf { it.isNotBlank() }
+    val delta = (if (likedNow) 1 else 0) - (if (c.isLiked) 1 else 0)
+    val n = base?.replace(",", "")?.toIntOrNull()
+    return when {
+        n != null -> (n + delta).takeIf { it > 0 }?.toString()
+        base == null -> if (delta > 0) "1" else null
+        else -> base
+    }
 }
 
 @Composable
@@ -134,25 +177,25 @@ fun CommentsPanel(state: CommentsState) {
         Column(Modifier.padding(start = 24.dp, end = 24.dp, top = Dims.SafeV, bottom = 10.dp)) {
             if (thread == null) {
                 Text("评论", style = Type.ScreenTitle)
-                Text("↑ ↓ 浏览 · 确认看回复 · 返回收起", style = Type.Label)
+                Notice(state.notice) { Text("确认看回复 · 长按确认点赞 · 返回收起", style = Type.Label) }
             } else {
                 Text("回复", style = Type.ScreenTitle)
-                Text("${thread.first.authorName.orEmpty()} 的评论 · 返回上一层", style = Type.Label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Notice(state.notice) { Text("${thread.first.authorName.orEmpty()} 的评论 · 长按确认点赞 · 返回上一层", style = Type.Label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(Film.Seam))
         if (thread == null) {
             val listState = rememberLazyListState(initialFirstVisibleItemIndex = state.parentIndex)
-            CommentColumn(state.top, listState, focusIndex = state.parentIndex, header = null) { i, c -> state.openThread(i, c) }
+            CommentColumn(state, state.top, listState, focusIndex = state.parentIndex, header = null) { i, c -> state.openThread(i, c) }
         } else {
-            CommentColumn(thread.second, rememberLazyListState(), focusIndex = 0, header = thread.first, onOpen = null)
+            CommentColumn(state, thread.second, rememberLazyListState(), focusIndex = 0, header = thread.first, onOpen = null)
         }
     }
 }
 
 @Composable
 private fun CommentColumn(
-    list: CommentList, listState: LazyListState, focusIndex: Int, header: CommentItem?,
+    state: CommentsState, list: CommentList, listState: LazyListState, focusIndex: Int, header: CommentItem?,
     onOpen: ((Int, CommentItem) -> Unit)?,
 ) {
     val target = remember { FocusRequester() }
@@ -180,7 +223,9 @@ private fun CommentColumn(
                     c = c,
                     indent = header != null && !isHeader,
                     canOpen = onOpen != null && !c.isEmpty,
+                    liked = state.isLiked(c),
                     onClick = { if (onOpen != null) onOpen(realIndex, c) },
+                    onLongClick = { state.toggleLike(c) },
                     modifier = (if (i == wantIndex) Modifier.focusRequester(target) else Modifier)
                         .onFocusChanged { if (it.isFocused && i >= rows.size - 4) list.loadMore() },
                 )
@@ -189,6 +234,12 @@ private fun CommentColumn(
             if (list.failed != null) item { Status(list.failed!!, retry = list::retry) }
         }
     }
+}
+
+/** 页眉副标题：有提示时临时换成提示 */
+@Composable
+private fun Notice(text: String?, normal: @Composable () -> Unit) {
+    if (text != null) Text(text, style = Type.Label.copy(color = Film.Amber)) else normal()
 }
 
 @Composable
@@ -204,10 +255,14 @@ private fun Status(text: String, retry: (() -> Unit)?) {
 
 @OptIn(ExperimentalGlideComposeApi::class)
 @Composable
-private fun CommentRow(c: CommentItem, indent: Boolean, canOpen: Boolean, onClick: () -> Unit, modifier: Modifier) {
+private fun CommentRow(
+    c: CommentItem, indent: Boolean, canOpen: Boolean, liked: Boolean,
+    onClick: () -> Unit, onLongClick: () -> Unit, modifier: Modifier,
+) {
     var focused by remember { mutableStateOf(false) }
     Surface(
         onClick = onClick,
+        onLongClick = onLongClick,
         modifier = modifier.fillMaxWidth().padding(start = if (indent) 18.dp else 0.dp)
             .onFocusChanged { focused = it.isFocused }
             .greasePencil(focused, c.id ?: c.message.orEmpty(), outset = 2.dp),
@@ -237,14 +292,23 @@ private fun CommentRow(c: CommentItem, indent: Boolean, canOpen: Boolean, onClic
                     style = Type.Body1.copy(color = if (focused) Film.Edge else Film.Edge2),
                     maxLines = if (focused) 18 else 4, overflow = TextOverflow.Ellipsis,
                 )
-                val likes = c.likeCount?.takeIf { it.isNotBlank() && it != "0" }
+                val likes = likeText(c, liked)
                 // 后端有时给纯数字，有时已带“条回复”字样
                 val replies = c.replyCount?.trim()?.takeIf { it.isNotBlank() && it != "0" }
                     ?.let { if (Regex("^[\\d.,]+\\s*[万千亿KMk]?$").matches(it)) "$it 条回复" else it }
-                if (likes != null || replies != null) {
+                if (likes != null || replies != null || liked) {
                     Spacer(Modifier.height(6.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        if (likes != null) Text("赞 $likes", style = Type.Label.copy(color = Film.Edge3))
+                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                if (liked) Icons.Filled.ThumbUp else Icons.Outlined.ThumbUp, contentDescription = if (liked) "已赞" else "赞",
+                                tint = if (liked) Film.Amber else Film.Edge3, modifier = Modifier.size(12.dp),
+                            )
+                            if (likes != null) {
+                                Spacer(Modifier.width(5.dp))
+                                Text(likes, style = Type.Label.copy(color = if (liked) Film.Amber else Film.Edge3))
+                            }
+                        }
                         if (replies != null) Text(
                             if (canOpen && focused) "$replies · 按确认查看" else replies,
                             style = Type.Label.copy(color = if (canOpen && focused) Film.Amber else Film.Edge3),

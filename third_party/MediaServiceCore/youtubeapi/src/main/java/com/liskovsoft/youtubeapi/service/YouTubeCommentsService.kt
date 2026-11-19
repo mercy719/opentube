@@ -2,6 +2,8 @@ package com.liskovsoft.youtubeapi.service
 
 import com.liskovsoft.mediaserviceinterfaces.CommentsService
 import com.liskovsoft.mediaserviceinterfaces.data.CommentGroup
+import com.liskovsoft.mediaserviceinterfaces.data.CommentItem
+import com.liskovsoft.youtubeapi.comments.impl.CommentItemImpl
 import com.liskovsoft.sharedutils.rx.RxHelper
 import com.liskovsoft.youtubeapi.comments.CommentsServiceInt
 import io.reactivex.Observable
@@ -29,5 +31,13 @@ internal object YouTubeCommentsService: CommentsService {
 
     override fun toggleDislikeObserve(key: String?): Observable<Void> {
         return RxHelper.fromRunnable { toggleDislike(key) }
+    }
+
+    // OPENTUBE
+    override fun setLikeObserve(item: CommentItem, like: Boolean): Observable<Void> {
+        return RxHelper.fromRunnable {
+            val impl = item as? CommentItemImpl ?: throw IllegalArgumentException("unsupported comment item")
+            CommentsServiceInt.setLike(impl, like)
+        }
     }
 }
