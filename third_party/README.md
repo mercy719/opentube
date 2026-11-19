@@ -17,6 +17,6 @@ OpenTube 复用其 YouTube 后端与播放内核，UI 层完全重写。
 2. ExoPlayer 模块：注释掉对 testutils 的测试依赖，以及 javadoc / publish 脚本。
 3. `exoplayer/constants.gradle`：`protobufVersion` 由 3.17.3 升到 3.25.5（旧版 protoc 没有 arm64 原生二进制）。
 4. 删除了所有 `src/test`、`src/androidTest`、demo 以及未使用的 ExoPlayer 扩展和 SharedModules 子模块。
-5. 根 `build.gradle` 覆盖了部分常量：Kotlin 2.0.21、okhttp 4.12（Coil 需要）、compileSdk 35。
+5. 根 `build.gradle` 覆盖了部分常量：Kotlin 2.0.21、compileSdk 35。okhttp 必须保持上游的 3.12.x，后端多个库依赖其内部 API，升级到 4.x 会在运行时失败。
 
 同步上游时，请重新应用以上改动。

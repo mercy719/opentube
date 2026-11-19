@@ -19,7 +19,6 @@ ext {
     coreXVersion = '1.13.1'
     compileSdkVersion = 35
     buildToolsVersion = '35.0.0'
-    okhttpVersion = '4.12.0'
 }
 
 allprojects {
