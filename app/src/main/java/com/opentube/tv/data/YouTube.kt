@@ -24,6 +24,8 @@ object YouTube {
     /** 首页会分多批返回行，逐批发出 */
     fun home(): Flow<List<MediaGroup>> = content.homeObserve.asFlow()
 
+    fun trending(): Flow<List<MediaGroup>> = content.trendingObserve.asFlow()
+
     suspend fun subscriptions(): MediaGroup? = content.subscriptionsObserve.awaitFirstOrNull()
     suspend fun history(): MediaGroup? = content.historyObserve.awaitFirstOrNull()
     suspend fun search(query: String): List<MediaGroup> = content.getSearchObserve(query).awaitFirstOrNull().orEmpty()

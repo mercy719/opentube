@@ -236,8 +236,14 @@ class OtPlayer(private val context: Context) {
         _state.update { it.copy(speed = speed) }
     }
 
+    /** 自动模式下的画质上限（设置项）。0 = 不限，仍受屏幕分辨率约束 */
+    var maxHeightCap: Int = 0
+        set(v) { field = v; if (_state.value.quality == Quality.Auto) setQuality(Quality.Auto) }
+
     fun setQuality(q: Quality) {
         val b = trackSelector.buildUponParameters().clearSelectionOverrides()
+            .setViewportSizeToPhysicalDisplaySize(context, true)
+            .setMaxVideoSize(Int.MAX_VALUE, if (maxHeightCap > 0 && q == Quality.Auto) maxHeightCap else Int.MAX_VALUE)
         if (q is Quality.Max) {
             // 2.10 没有 minVideoSize：直接覆盖选择该高度的轨道（同一轨道组内，可保留帧率/码率差异间的自适应）
             val info = trackSelector.currentMappedTrackInfo

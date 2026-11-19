@@ -6,6 +6,7 @@ import androidx.multidex.MultiDexApplication
 import com.liskovsoft.sharedutils.prefs.GlobalPreferences
 import com.liskovsoft.sharedutils.rx.RxHelper
 import com.liskovsoft.youtubeapi.service.YouTubeServiceManager
+import com.liskovsoft.googlecommon.common.locale.LocaleManager
 
 class OpenTubeApp : MultiDexApplication() {
     override fun onCreate() {
@@ -15,6 +16,9 @@ class OpenTubeApp : MultiDexApplication() {
         RxHelper.setupGlobalErrorHandler()
         // 后端所有服务都通过 GlobalPreferences 取 Context，必须最先初始化
         GlobalPreferences.instance(this)
+        // 界面以简体中文为主：让 YouTube 返回的行标题、观看数、日期也用中文
+        val locale = LocaleManager.instance()
+        if (locale.language?.startsWith("zh") != true) locale.language = "zh-CN"
 
         // 预热播放解析引擎（JS 解密 / nsig / PoToken），让第一次点视频不再等它
         Handler(Looper.getMainLooper()).postDelayed({
